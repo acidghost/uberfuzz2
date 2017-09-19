@@ -127,7 +127,7 @@ static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t siz
     char message[PATH_MAX * 2];
     snprintf(message, (PATH_MAX * 2) - 1, "%s %s %s",
              driver->fuzzer_id, input_filename, coverage_filename);
-    if (zmq_send(driver->interesting_push, message, strlen(message)+1, 0) == -1) {
+    if (zmq_send(driver->interesting_push, message, strlen(message), 0) == -1) {
         PLOG_F("failed pushing on the interesting queue");
         return false;
     }
