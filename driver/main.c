@@ -29,10 +29,111 @@ typedef struct driver {
     void *interesting_push;
     void *use_sub;
     void *metric_rep;
+    char *data_path;
 } driver_t;
 
 
+typedef struct branch {
+    uint64_t from;
+    uint64_t to;
+} branch_t;
+
+
+#define BUF_SZ              (1024 * 1024)
+
+
 bool keep_running = true;
+
+
+static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
+{
+    bts_branch_t *bts_start;
+    uint64_t count;
+    int perf_ret = perf_monitor_api(buf, size, driver->sut, &bts_start, &count);
+    if (perf_ret == PERF_FAILURE) {
+        LOG_F("failed perf monitoring");
+        return false;
+    }
+
+    const section_bounds_t *sec_bounds = driver->sec_bounds;
+    const uint64_t sec_start = sec_bounds ? sec_bounds->sec_start : 0;
+    const uint64_t sec_end = sec_bounds ? sec_bounds->sec_end : 0;
+
+    branch_t branches[count];
+    size_t branches_i = 0;
+    for (uint64_t i = 0; i < count; i++) {
+        bts_branch_t branch = bts_start[i];
+        if (branch.from > 0xFFFFFFFF00000000 || branch.to > 0xFFFFFFFF00000000) {
+            continue;
+        }
+
+        if (sec_bounds && (
+                (branch.from < sec_start || branch.from > sec_end)
+                || (branch.to < sec_start || branch.to > sec_end)
+            )
+        ) continue;
+
+        uint64_t from_bb = 0, to_bb = 0;
+        for (size_t j = 0; j < driver->bbs_n; j++) {
+            basic_block_t bb = driver->bbs[j];
+            if (branch.from >= bb.from && branch.from < bb.to)
+                from_bb = bb.from;
+            if (branch.to >= bb.from && branch.to < bb.to)
+                to_bb = bb.from;
+            if (from_bb != 0 && to_bb != 0)
+                break;
+        }
+        if (from_bb == 0)
+            from_bb = branch.from;
+        if (to_bb == 0)
+            to_bb = branch.to;
+
+        branches[branches_i] = (branch_t) { from_bb, to_bb };
+        branches_i++;
+    }
+
+    char coverage_filename[PATH_MAX];
+    snprintf(coverage_filename, PATH_MAX - 1, "%s/%05zu.coverage",
+             driver->data_path, driver->input_n);
+
+    FILE *coverage_file = fopen(coverage_filename, "wb");
+    if (coverage_file == NULL) {
+        PLOG_F("failed to open coverage file %s", coverage_filename);
+        return false;
+    }
+    if (fwrite(branches, sizeof(branch_t), branches_i, coverage_file) != branches_i) {
+        LOG_E("items written to %s do not match", coverage_filename);
+        fclose(coverage_file);
+        return false;
+    }
+    fclose(coverage_file);
+
+    char input_filename[PATH_MAX];
+    snprintf(input_filename, PATH_MAX - 1, "%s/%05zu.input",
+             driver->data_path, driver->input_n);
+
+    FILE *input_file = fopen(input_filename, "w");
+    if (input_file == NULL) {
+        PLOG_F("failed to open input file %s", input_filename);
+        return false;
+    }
+    if (fwrite(buf, sizeof(uint8_t), size, input_file) != size) {
+        LOG_E("items written to %s do not match", input_filename);
+        fclose(input_file);
+        return false;
+    }
+    fclose(coverage_file);
+
+    char message[PATH_MAX * 2];
+    snprintf(message, (PATH_MAX * 2) - 1, "%s %s %s",
+             driver->fuzzer_id, input_filename, coverage_filename);
+    if (zmq_send(driver->interesting_push, message, strlen(message)+1, 0) == -1) {
+        PLOG_F("failed pushing on the interesting queue");
+        return false;
+    }
+
+    return true;
+}
 
 
 static pid_t start_fuzzer(driver_t *driver)
@@ -62,21 +163,20 @@ static pid_t start_fuzzer(driver_t *driver)
 
 static int driver_loop(driver_t *driver)
 {
+    int ret = EXIT_SUCCESS;
+    pid_t fuzzer_pid = start_fuzzer(driver);
+    if (fuzzer_pid == -1) {
+        LOG_F("failed to start fuzzer %s", driver->fuzzer[0]);
+        return EXIT_FAILURE;
+    } else {
+        LOG_I("fuzzer %s started (pid=%d)", driver->fuzzer[0], fuzzer_pid);
+    }
+
     int watch_d = 0;
     int inotify_fd = inotify_setup(driver->fuzzer_corpus_path, &keep_running, &watch_d);
     if (inotify_fd == -1) {
         LOG_F("failed to setup inotify on %s", driver->fuzzer_corpus_path);
         return EXIT_FAILURE;
-    }
-
-    int ret = EXIT_SUCCESS;
-    pid_t fuzzer_pid = start_fuzzer(driver);
-    if (fuzzer_pid == -1) {
-        LOG_F("failed to start fuzzer %s", driver->fuzzer[0]);
-        ret = EXIT_FAILURE;
-        keep_running = false;
-    } else {
-        LOG_I("fuzzer %s started (pid=%d)", driver->fuzzer[0], fuzzer_pid);
     }
 
     while (keep_running) {
@@ -85,8 +185,23 @@ static int driver_loop(driver_t *driver)
             break;
         }
 
-        // TODO: main driver loop
         // 1. look if fuzzer has a new input -> push to queue
+        uint8_t buf[BUF_SZ];
+        int size = inotify_maybe_read(inotify_fd, watch_d, driver->fuzzer_corpus_path,
+                                      buf, BUF_SZ);
+        if (size == -1) {
+            ret = EXIT_FAILURE;
+            break;
+        } else if (size > 0) {
+            driver->input_n++;
+            // analyse new input and push to `interesting_push`
+            if (!process_interesting_input(driver, buf, size)) {
+                LOG_F("failed processing interesting input");
+                ret = EXIT_FAILURE;
+                break;
+            }
+        }
+
         // 2. look for metric requests -> reply to request
         // 3. look for new inputs to use/fuzz -> inject into fuzzer
 
@@ -165,7 +280,7 @@ static void free_driver(driver_t *driver)
 static void usage(const char *progname)
 {
     printf("usage: %s -i fuzzer_id -f fuzzer_cmd [-s .section] -b r2bb.sh "
-           "-c corpus -p p1,p2,p3 -- command [args]\n", progname);
+           "-c corpus -p p1,p2,p3 -d data_path -- command [args]\n", progname);
 }
 
 
@@ -180,7 +295,7 @@ int main(int argc, char const *argv[]) {
     memset(driver, 0, sizeof(driver_t));
 
     int opt;
-    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:")) != -1) {
+    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:")) != -1) {
         switch (opt) {
         case 'i':
             driver->fuzzer_id = optarg;
@@ -203,12 +318,15 @@ int main(int argc, char const *argv[]) {
         case 'p':
             queues_ports_str = optarg;
             break;
+        case 'd':
+            driver->data_path = optarg;
+            break;
         }
     }
 
     if (argc == optind || driver->fuzzer_id == NULL ||
         basic_block_script == NULL || driver->fuzzer_corpus_path == NULL ||
-        queues_ports_str == NULL) {
+        queues_ports_str == NULL || driver->data_path == NULL) {
         free_driver(driver);
         usage(argv[0]);
         exit(EXIT_FAILURE);
