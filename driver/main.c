@@ -51,6 +51,7 @@ static pid_t start_fuzzer(driver_t *driver)
         dup2(null_fd, STDOUT_FILENO);
         dup2(null_fd, STDERR_FILENO);
         execv(driver->fuzzer[0], driver->fuzzer);
+        PLOG_F("failed to execv fuzzer");
         abort();
     } else {
         // parent, child_pid = pid
@@ -79,10 +80,16 @@ static int driver_loop(driver_t *driver)
     }
 
     while (keep_running) {
+        if (kill(fuzzer_pid, 0) == -1 && errno == ESRCH) {
+            LOG_I("fuzzer stopped, exiting");
+            break;
+        }
+
         // TODO: main driver loop
         // 1. look if fuzzer has a new input -> push to queue
         // 2. look for metric requests -> reply to request
         // 3. look for new inputs to use/fuzz -> inject into fuzzer
+
         usleep(100);
     }
 
@@ -119,7 +126,8 @@ static bool parse_fuzzer_cmd(driver_t *driver, const char *fuzzer_cmd_filename)
     }
 
     driver->fuzzer_n = i;
-    driver->fuzzer = realloc(driver->fuzzer, i * sizeof(char *));
+    driver->fuzzer[i] = NULL;
+    driver->fuzzer = realloc(driver->fuzzer, (i + 1) * sizeof(char *));
 
     if (i > 1) {
         return true;
