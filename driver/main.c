@@ -29,7 +29,7 @@ typedef struct driver {
     void *interesting_push;
     void *use_sub;
     void *metric_rep;
-    char *data_path;
+    const char *data_path;
 } driver_t;
 
 
@@ -185,6 +185,14 @@ static int driver_loop(driver_t *driver)
             break;
         }
 
+        if (!keep_running) {
+            if (kill(fuzzer_pid, SIGKILL) == -1) {
+                PLOG_F("failed to kill fuzzer (pid=%d)", fuzzer_pid);
+                ret = EXIT_FAILURE;
+            }
+            break;
+        }
+
         // 1. look if fuzzer has a new input -> push to queue
         uint8_t buf[BUF_SZ];
         int size = inotify_maybe_read(inotify_fd, watch_d, driver->fuzzer_corpus_path,
@@ -334,6 +342,8 @@ int main(int argc, char const *argv[]) {
 
     driver->sut = argv + optind;
 
+    LOG_I("driver on %s", driver->fuzzer[0]);
+
     if (sec_name) {
         driver->sec_bounds = malloc(sizeof(section_bounds_t));
         assert(driver->sec_bounds != NULL);
@@ -345,11 +355,11 @@ int main(int argc, char const *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-        LOG_I("driver on %s (%s 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
+        LOG_I("SUT %s (%s 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
             driver->sut[0], sec_name, driver->sec_bounds->sec_start,
             driver->sec_bounds->sec_end, sec_size);
     } else {
-        LOG_I("driver on %s (all code)", driver->sut[0]);
+        LOG_I("SUT %s (all code)", driver->sut[0]);
     }
 
     driver->bbs_n = basic_blocks_find(basic_block_script, driver->sut[0], &driver->bbs);
