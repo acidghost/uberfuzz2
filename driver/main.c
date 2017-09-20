@@ -203,6 +203,8 @@ static int driver_loop(driver_t *driver)
         } else if (size > 0) {
             driver->input_n++;
             // analyse new input and push to `interesting_push`
+            // FIXME: why is the following line required?
+            LOG_I("got input %zu of %zu bytes", driver->input_n, size);
             if (!process_interesting_input(driver, buf, size)) {
                 LOG_F("failed processing interesting input");
                 ret = EXIT_FAILURE;
