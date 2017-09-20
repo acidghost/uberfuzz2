@@ -405,6 +405,12 @@ int main(int argc, char const *argv[]) {
         zmq_ctx_destroy(context);
         exit(EXIT_FAILURE);
     }
+    if (zmq_setsockopt(driver->use_sub, ZMQ_SUBSCRIBE, "A", 1) == -1) {
+        PLOG_F("failed to set sockopt for use subscription");
+        free_driver(driver);
+        zmq_ctx_destroy(context);
+        exit(EXIT_FAILURE);
+    }
     LOG_I("connected to use input queue on %s", buf);
 
     driver->metric_rep = zmq_socket(context, ZMQ_REP);
