@@ -1,4 +1,5 @@
-use std::convert::Into;
+use std::convert::{From, Into};
+use std::fs::File;
 use std::str::FromStr;
 use std::process::{Child, Command, Stdio};
 
@@ -43,7 +44,8 @@ pub struct Driver {
     use_port: u32,
     metric_port: u32,
     data_path: String,
-    sut: Vec<String>
+    sut: Vec<String>,
+    log_filename: String
 }
 
 
@@ -72,12 +74,16 @@ impl Driver {
             use_port: use_port.into().unwrap_or(master::USE_PORT),
             metric_port: metric_port,
             data_path: format!("{}/{}/driver", work_path, fuzzer_id),
-            sut: sut
+            sut: sut,
+            log_filename: format!("{}/{}.log", work_path, fuzzer_id)
         }
     }
 
     pub fn spawn(&self) -> Child {
         let ports = format!("{},{},{}", self.interesting_port, self.use_port, self.metric_port);
+        let file: File = File::create(&self.log_filename)
+            .expect(&format!("failed to create {}", self.log_filename));
+
         Command::new(DRIVER_EXE)
             .args(&["-i", &self.fuzzer_id])
             .args(&["-s", &self.section_name])
@@ -87,8 +93,13 @@ impl Driver {
             .args(&["-p", &ports])
             .args(&["-d", &self.data_path])
             .arg("--").args(&self.sut)
-            .stdout(Stdio::null())
+            .stdout(Stdio::from(file))
+            // FIXME: .stderr(Stdio::from(file))
             .spawn()
             .expect(&format!("failed to spawn driver {}", self.fuzzer_id))
+    }
+
+    pub fn get_metric_port(&self) -> u32 {
+        self.metric_port
     }
 }
