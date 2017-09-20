@@ -4,6 +4,7 @@ extern crate nix;
 
 mod driver;
 mod master;
+mod messages;
 
 use master::Master;
 

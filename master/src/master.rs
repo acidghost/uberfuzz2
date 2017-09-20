@@ -1,27 +1,33 @@
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Child;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 use ctrlc;
+use zmq;
 
 use driver::{Driver, FuzzerType};
+use messages::{InterestingInput, UseInput};
 
 
-pub const INTERESTING_PORT: u32 = 5555;
+pub const INTERESTING_PORT: u32 = 1337;
 pub const USE_PORT: u32 = INTERESTING_PORT + 1;
 pub const METRIC_PORT_START: u32 = USE_PORT + 1;
+const BIND_ADDR: &'static str = "tcp://*";
+const CONN_ADDR: &'static str = "tcp://localhost";
 
 
 pub struct Master {
     sut: Vec<String>,
     drivers: HashMap<String, Driver>,
-    processes: HashMap<String, Child>
+    processes: HashMap<String, Child>,
+    interesting_pull: Option<zmq::Socket>,
+    use_pub: Option<zmq::Socket>,
+    metric_reqs: HashMap<String, zmq::Socket>
 }
 
 
@@ -59,11 +65,17 @@ impl Master {
                     None, None, None, None, None);
                 drivers_map.insert(fuzzer_id, driver);
             }
-            Ok(Master {
+
+            let m = Master {
                 sut: sut,
                 drivers: drivers_map,
-                processes: HashMap::new()
-            })
+                processes: HashMap::new(),
+                interesting_pull: None,
+                use_pub: None,
+                metric_reqs: HashMap::new()
+            };
+
+            Ok(m)
         }
     }
 
@@ -80,11 +92,31 @@ impl Master {
     pub fn start(&mut self) {
         println!("starting master (SUT {})", self.sut.first().unwrap());
 
+        let context = zmq::Context::new();
+
+        {   // bind to interesting_port in PULL (pull interesting inputs)
+            let socket = context.socket(zmq::PULL).expect("failed to create interesting socket");
+            let address = &format!("{}:{}", BIND_ADDR, INTERESTING_PORT);
+            socket.bind(address).expect(&format!("failed to bind interesting socket to {}", address));
+            println!("bind 'interesting' socket {}", address);
+            self.interesting_pull = Some(socket);
+        }
+
+        {   // bind to use_port in PUB (publish input to use)
+            let socket = context.socket(zmq::PUB).expect("failed to create use socket");
+            let address = &format!("{}:{}", BIND_ADDR, USE_PORT);
+            socket.bind(address).expect(&format!("failed to bind use socket to {}", address));
+            println!("bind 'use' socket {}", address);
+            self.use_pub = Some(socket);
+        }
+
+        // spawn drivers
         for (fuzzer_id, driver) in &self.drivers {
             self.processes.insert(fuzzer_id.clone(), driver.spawn());
             println!("started {}", fuzzer_id);
         }
 
+        // setup ctrlc handler
         let interrupted = Arc::new(AtomicBool::new(false));
         {
             let interrupted_clone = Arc::clone(&interrupted);
@@ -96,6 +128,14 @@ impl Master {
                         .expect("failed to kill driver");
                 }
             }).expect("failed to set interrupt handler");
+        }
+
+        // connect to metric_port in REQ for each driver (requests metric to driver)
+        for (fuzzer_id, driver) in &self.drivers {
+            let socket = context.socket(zmq::REQ).expect("failed to create metric socket");
+            let address = &format!("{}:{}", CONN_ADDR, driver.get_metric_port());
+            socket.connect(address).expect(&format!("failed to connecto to metric socket {}", address));
+            self.metric_reqs.insert(fuzzer_id.clone(), socket);
         }
 
         'outer: while !interrupted.load(Ordering::Relaxed) {
@@ -113,10 +153,33 @@ impl Master {
                     }
                 }
             }
+
+            if let Some(interesting_input) = self.pull_interesting() {
+                println!("{:?}", interesting_input);
+                // TODO: propagate interesting_input
+            }
         }
 
         if !interrupted.load(Ordering::Relaxed) {
             self.stop();
+        }
+    }
+
+    fn pull_interesting(&self) -> Option<InterestingInput> {
+        match self.interesting_pull.as_ref().unwrap().recv_bytes(zmq::DONTWAIT) {
+            Ok(bytes) => {
+                let mut message_cow = String::from_utf8_lossy(&bytes);
+                let mut splitted = message_cow.to_mut().split(" ");
+                let interesting_input = InterestingInput {
+                    fuzzer_id: splitted.nth(0).unwrap().to_string().clone(),
+                    input_path: splitted.nth(0).unwrap().to_string().clone(),
+                    coverage_path: splitted.nth(0).unwrap().to_string().clone()
+                };
+
+                Some(interesting_input)
+            },
+            Err(zmq::Error::EAGAIN) => None,
+            Err(error) => panic!("pull_interesting error {:?}", error)
         }
     }
 }
