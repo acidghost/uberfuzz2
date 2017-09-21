@@ -53,6 +53,7 @@ typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
 #define COV_FMT             "%05zu.%zu.coverage"
 #define INPUT_FMT           "%05zu.input"
 #define METRIC_FN           &metric_diff
+#define SUB_TOPIC           "A"
 
 
 bool keep_running = true;
@@ -396,7 +397,15 @@ driver_loop(driver_t *driver)
             }
         } else {
             zmq_recv_buf[size] = '\0';
-            // TODO: parse input to use and use it
+            // parse 'use' message
+            char fuzzer_id[32], input_path[PATH_MAX], coverage_path[PATH_MAX];
+            sscanf((char *) zmq_recv_buf, SUB_TOPIC " %s %s %s",
+                fuzzer_id, input_path, coverage_path);
+
+            if (strcmp(fuzzer_id, driver->fuzzer_id) == 0) {
+                LOG_I("using %s", input_path);
+                // TODO: inject into fuzzer
+            }
         }
 
         usleep(100);
@@ -614,7 +623,8 @@ main(int argc, char const *argv[]) {
         zmq_ctx_destroy(context);
         exit(EXIT_FAILURE);
     }
-    if (zmq_setsockopt(driver->use_sub, ZMQ_SUBSCRIBE, "A", 1) == -1) {
+    if (zmq_setsockopt(driver->use_sub, ZMQ_SUBSCRIBE,
+                       SUB_TOPIC, strlen(SUB_TOPIC)) == -1) {
         PLOG_F("failed to set sockopt for use subscription");
         free_driver(driver);
         zmq_ctx_destroy(context);

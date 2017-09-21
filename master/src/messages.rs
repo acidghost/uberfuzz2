@@ -9,6 +9,16 @@ pub struct InterestingInput {
     pub coverage_path: String
 }
 
+impl InterestingInput {
+    pub fn with_new_fuzzer_id(&self, fuzzer_id: &String) -> InterestingInput {
+        InterestingInput {
+            fuzzer_id: fuzzer_id.clone(),
+            input_path: self.input_path.clone(),
+            coverage_path: self.coverage_path.clone()
+        }
+    }
+}
+
 impl FromStr for InterestingInput {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -37,7 +47,8 @@ impl FromStr for InterestingInput {
 
 impl ToString for InterestingInput {
     fn to_string(&self) -> String {
-        format!("{} {} {}", self.fuzzer_id, self.input_path, self.coverage_path)
+        // the 'A' is the subscription topic, by subscribing to it drivers can receive all messages
+        format!("A {} {} {}", self.fuzzer_id, self.input_path, self.coverage_path)
     }
 }
 

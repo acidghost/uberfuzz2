@@ -189,7 +189,7 @@ impl Master {
     {
         info!("new input from {}", interesting_input.fuzzer_id);
 
-        let metrics = self.evaluate_interesting(interesting_input)?;
+        let metrics = self.evaluate_interesting(&interesting_input)?;
         let mut metrics_str = String::new();
         for (k, v) in &metrics {
             metrics_str += &format!(" ({} {})", k, v.metric);
@@ -197,17 +197,19 @@ impl Master {
         info!("metrics:{}", metrics_str);
 
         let winning_driver = Master::metric_winner(&metrics, true)?;
-        info!("winning driver: {}", winning_driver);
-        // TODO: assign input to winning driver
+        info!("winning driver is {}", winning_driver);
+
+        self.assign_input(&interesting_input, winning_driver)?;
+        info!("input sent to {}", winning_driver);
 
         Ok(())
     }
 
-    fn evaluate_interesting(&self, interesting_input: InterestingInput)
+    fn evaluate_interesting(&self, interesting_input: &InterestingInput)
         -> Result<HashMap<&String, RepMetric>, String>
     {
         let mut metrics = HashMap::new();
-        let request = ReqMetric { coverage_path: interesting_input.coverage_path };
+        let request = ReqMetric { coverage_path: interesting_input.coverage_path.clone() };
         for (fuzzer_id, metric_socket) in &self.metric_reqs {
             if *fuzzer_id == interesting_input.fuzzer_id {
                 continue;
@@ -250,5 +252,14 @@ impl Master {
         }
 
         Ok(winning_key)
+    }
+
+    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_id: &String)
+        -> Result<(), String>
+    {
+        let input = interesting_input.with_new_fuzzer_id(fuzzer_id);
+        self.use_pub.as_ref().unwrap().send_str(&input.to_string(), 0).map_err(|e| {
+            format!("error publishing input to use: {}", e)
+        })
     }
 }
