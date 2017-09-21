@@ -214,7 +214,7 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         fclose(input_file);
         return false;
     }
-    fclose(coverage_file);
+    fclose(input_file);
 
     // send zmq message
     char message[PATH_MAX * 2];
@@ -404,7 +404,7 @@ driver_loop(driver_t *driver)
 
 
 void
-int_sig_handler(int signum)
+sig_handler(int signum)
 {
     keep_running = false;
 }
@@ -618,7 +618,8 @@ main(int argc, char const *argv[]) {
         LOG_I("failed to create coverage_info");
         ret = EXIT_FAILURE;
     } else {
-        signal(SIGINT, int_sig_handler);
+        signal(SIGINT, sig_handler);
+        signal(SIGKILL, sig_handler);
         ret = driver_loop(driver);
     }
 
