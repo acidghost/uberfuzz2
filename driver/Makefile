@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-Wall -O3 -std=c11
-LDLIBS=-lzmq
+LDLIBS=-lzmq -lcollectc
 
 BIN := driver
 

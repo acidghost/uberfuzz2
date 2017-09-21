@@ -14,6 +14,8 @@
 #include <zmq.h>
 #include <signal.h>
 #include <sys/fcntl.h>
+#include <collectc/hashtable.h>
+#include <libgen.h>
 
 
 typedef struct driver {
@@ -30,6 +32,7 @@ typedef struct driver {
     void *use_sub;
     void *metric_rep;
     const char *data_path;
+    HashTable *coverage_info;
 } driver_t;
 
 
@@ -39,14 +42,88 @@ typedef struct branch {
 } branch_t;
 
 
+typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
+
+
 #define BUF_SZ              (1024 * 1024)
+#define RECV_BUF_SZ         (1024)
+#define HASH_KEY_SEP        "/"
+#define HASH_KEY_SZ         64
+#define COV_FMT             "%05zu.%zu.coverage"
+#define INPUT_FMT           "%05zu.input"
+#define METRIC_FN           &metric_diff
 
 
 bool keep_running = true;
 
 
-static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
+static pid_t
+start_fuzzer(driver_t *driver)
 {
+    pid_t pid = fork();
+    if (pid < 0) {
+        PLOG_F("failed to fork");
+        return -1;
+    } else if (pid == 0) {
+        // child, run fuzzer
+        int null_fd = open("/dev/null", O_WRONLY);
+        if (null_fd == -1) {
+            PLOG_F("failed to open /dev/null");
+            abort();
+        }
+        dup2(null_fd, STDOUT_FILENO);
+        dup2(null_fd, STDERR_FILENO);
+        execv(driver->fuzzer[0], driver->fuzzer);
+        PLOG_F("failed to execv fuzzer");
+        abort();
+    } else {
+        // parent, child_pid = pid
+        return pid;
+    }
+}
+
+
+static inline char *
+coverage_info_key(branch_t *branch)
+{
+    char *key = malloc(sizeof(char) * HASH_KEY_SZ);
+    assert(key != NULL);
+    snprintf(key, HASH_KEY_SZ - 1, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
+             branch->from, branch->to);
+    return key;
+}
+
+
+static bool
+add_coverage_info(driver_t *driver, branch_t *coverage_info, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        branch_t branch = coverage_info[i];
+        char *key = coverage_info_key(&branch);
+
+        uint64_t *value = NULL;
+        if (hashtable_get(driver->coverage_info, key, (void **) &value) == CC_OK) {
+            (*value)++;
+            free(key);
+        } else {
+            value = malloc(sizeof(uint64_t));
+            assert(value != NULL);
+            *value = 1;
+            if (hashtable_add(driver->coverage_info, key, value) != CC_OK) {
+                LOG_F("failed to add branch [%s]", key);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+static bool
+process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
+{
+    // collect coverage info, filter it and add to knowledge-base
     bts_branch_t *bts_start;
     uint64_t count;
     int perf_ret = perf_monitor_api(buf, size, driver->sut, &bts_start, &count);
@@ -92,9 +169,15 @@ static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t siz
         branches_i++;
     }
 
+    if (!add_coverage_info(driver, branches, branches_i)) {
+        LOG_F("failed to add coverage info");
+        return false;
+    }
+
+    // store coverage info to file
     char coverage_filename[PATH_MAX];
-    snprintf(coverage_filename, PATH_MAX - 1, "%s/%05zu.coverage",
-             driver->data_path, driver->input_n);
+    snprintf(coverage_filename, PATH_MAX - 1, "%s/" COV_FMT,
+             driver->data_path, driver->input_n, branches_i);
 
     FILE *coverage_file = fopen(coverage_filename, "wb");
     if (coverage_file == NULL) {
@@ -108,8 +191,9 @@ static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t siz
     }
     fclose(coverage_file);
 
+    // store input to file
     char input_filename[PATH_MAX];
-    snprintf(input_filename, PATH_MAX - 1, "%s/%05zu.input",
+    snprintf(input_filename, PATH_MAX - 1, "%s/" INPUT_FMT,
              driver->data_path, driver->input_n);
 
     FILE *input_file = fopen(input_filename, "w");
@@ -124,6 +208,7 @@ static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t siz
     }
     fclose(coverage_file);
 
+    // send zmq message
     char message[PATH_MAX * 2];
     snprintf(message, (PATH_MAX * 2) - 1, "%s %s %s",
              driver->fuzzer_id, input_filename, coverage_filename);
@@ -136,32 +221,73 @@ static bool process_interesting_input(driver_t *driver, uint8_t *buf, size_t siz
 }
 
 
-static pid_t start_fuzzer(driver_t *driver)
+static ssize_t
+load_coverage_info(const char *cov_filename, branch_t **cov_info)
 {
-    pid_t pid = fork();
-    if (pid < 0) {
-        PLOG_F("failed to fork");
+    assert(cov_info != NULL);
+
+    // parse cov_count from filename
+    char *cov_filename_dup = strdup(cov_filename);
+    char *cov_basename = basename(cov_filename_dup);
+    size_t cov_count = 0, input_n = 0;
+    sscanf(cov_basename, COV_FMT, &input_n, &cov_count);
+    free(cov_filename_dup);
+
+    FILE *cov_file = fopen(cov_filename, "rb");
+    if (cov_file == NULL) {
+        PLOG_F("failed to open %s", cov_filename);
         return -1;
-    } else if (pid == 0) {
-        // child, run fuzzer
-        int null_fd = open("/dev/null", O_WRONLY);
-        if (null_fd == -1) {
-            PLOG_F("failed to open /dev/null");
-            abort();
-        }
-        dup2(null_fd, STDOUT_FILENO);
-        dup2(null_fd, STDERR_FILENO);
-        execv(driver->fuzzer[0], driver->fuzzer);
-        PLOG_F("failed to execv fuzzer");
-        abort();
-    } else {
-        // parent, child_pid = pid
-        return pid;
     }
+
+    *cov_info = malloc(sizeof(branch_t) * cov_count);
+    assert(*cov_info != NULL);
+    size_t r = fread(*cov_info, sizeof(branch_t), cov_count, cov_file);
+
+    ssize_t ret = cov_count;
+    if (ferror(cov_file) != 0 || r != cov_count)
+        ret = -1;
+
+    fclose(cov_file);
+    return ret;
 }
 
 
-static int driver_loop(driver_t *driver)
+static float
+metric_diff(driver_t *driver, branch_t *cov_info, size_t cov_count)
+{
+    float score = 0;
+    for (size_t i = 0; i < cov_count; i++) {
+        branch_t branch = cov_info[i];
+        char *key = coverage_info_key(&branch);
+        if (!hashtable_contains_key(driver->coverage_info, key)) {
+            score++;
+        }
+        free(key);
+    }
+
+    return score;
+}
+
+
+static bool
+compute_metric(driver_t *driver, const char *cov_filename, metric_fn_t f, float *score)
+{
+    assert(score != NULL);
+
+    branch_t *cov_info = NULL;
+    ssize_t cov_count = load_coverage_info(cov_filename, &cov_info);
+    if (cov_count < 0) {
+        return false;
+    }
+
+    *score = f(driver, cov_info, cov_count);
+
+    return true;
+}
+
+
+static int
+driver_loop(driver_t *driver)
 {
     int ret = EXIT_SUCCESS;
     pid_t fuzzer_pid = start_fuzzer(driver);
@@ -212,8 +338,51 @@ static int driver_loop(driver_t *driver)
             }
         }
 
+        uint8_t zmq_recv_buf[RECV_BUF_SZ];
+        memset(zmq_recv_buf, 0, RECV_BUF_SZ);
+
         // 2. look for metric requests -> reply to request
+        size = zmq_recv(driver->metric_rep, zmq_recv_buf, RECV_BUF_SZ-1, ZMQ_DONTWAIT);
+        if (size == -1) {
+            if (errno != EAGAIN && errno != EFSM) {
+                PLOG_F("failed receiving on the metric queue");
+                ret = EXIT_FAILURE;
+                break;
+            }
+        } else {
+            zmq_recv_buf[size] = '\0';
+            LOG_I("metric req %s", zmq_recv_buf);
+            float metric = 0;
+            if (!compute_metric(driver, (const char *) zmq_recv_buf, METRIC_FN, &metric)) {
+                LOG_F("failed to compute metric");
+                ret = EXIT_FAILURE;
+                break;
+            }
+
+            char zmq_send_buf[RECV_BUF_SZ];
+            snprintf(zmq_send_buf, RECV_BUF_SZ, "%f", metric);
+            int r = zmq_send(driver->metric_rep, zmq_send_buf, strlen(zmq_send_buf), 0);
+            if (r == -1) {
+                PLOG_F("failed to send metric reply");
+                ret = EXIT_FAILURE;
+                break;
+            }
+        }
+
+        memset(zmq_recv_buf, 0, RECV_BUF_SZ);
+
         // 3. look for new inputs to use/fuzz -> inject into fuzzer
+        size = zmq_recv(driver->use_sub, zmq_recv_buf, RECV_BUF_SZ-1, ZMQ_DONTWAIT);
+        if (size == -1) {
+            if (errno != EAGAIN) {
+                PLOG_F("failed receiving on the use queue");
+                ret = EXIT_FAILURE;
+                break;
+            }
+        } else {
+            zmq_recv_buf[size] = '\0';
+            // TODO: parse input to use and use it
+        }
 
         usleep(100);
     }
@@ -223,13 +392,15 @@ static int driver_loop(driver_t *driver)
 }
 
 
-void int_sig_handler(int signum)
+void
+int_sig_handler(int signum)
 {
     keep_running = false;
 }
 
 
-static bool parse_fuzzer_cmd(driver_t *driver, const char *fuzzer_cmd_filename)
+static bool
+parse_fuzzer_cmd(driver_t *driver, const char *fuzzer_cmd_filename)
 {
     driver->fuzzer = malloc(sizeof(char *) * 32);
     assert(driver->fuzzer != NULL);
@@ -263,7 +434,8 @@ static bool parse_fuzzer_cmd(driver_t *driver, const char *fuzzer_cmd_filename)
 }
 
 
-static void free_driver(driver_t *driver)
+static void
+free_driver(driver_t *driver)
 {
     if (driver->fuzzer) {
         for (size_t i = 0; i < driver->fuzzer_n; i++)
@@ -287,14 +459,16 @@ static void free_driver(driver_t *driver)
 }
 
 
-static void usage(const char *progname)
+static void
+usage(const char *progname)
 {
     printf("usage: %s -i fuzzer_id -f fuzzer_cmd [-s .section] -b r2bb.sh "
            "-c corpus -p p1,p2,p3 -d data_path -- command [args]\n", progname);
 }
 
 
-int main(int argc, char const *argv[]) {
+int
+main(int argc, char const *argv[]) {
     log_level = INFO;
     char *sec_name = NULL;
     char *basic_block_script = NULL;
@@ -425,8 +599,13 @@ int main(int argc, char const *argv[]) {
     }
     LOG_I("bind metric server on %s", buf);
 
-    signal(SIGINT, int_sig_handler);
-    ret = driver_loop(driver);
+    if (hashtable_new(&driver->coverage_info) != CC_OK) {
+        LOG_I("failed to create coverage_info");
+        ret = EXIT_FAILURE;
+    } else {
+        signal(SIGINT, int_sig_handler);
+        ret = driver_loop(driver);
+    }
 
     free_driver(driver);
     zmq_ctx_destroy(context);
