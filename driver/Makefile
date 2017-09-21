@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-Wall -O3 -std=c11
-LDLIBS=-lzmq -lcollectc
+LDLIBS=-lzmq -L/usr/local/lib -l:libcollectc.a
 
 BIN := driver
 
