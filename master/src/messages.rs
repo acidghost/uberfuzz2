@@ -60,13 +60,10 @@ pub struct RepMetric {
 impl FromStr for RepMetric {
     type Err = String;
     fn from_str(s: &str) -> Result<RepMetric, String> {
-        Ok(
-            RepMetric {
-                metric: match s.parse() {
-                    Ok(f) => f,
-                    Err(e) => return Err(format!("failed parsing metric {}. {}", s, e))
-                }
-            }
-        )
+        let metric = s.parse().map_err(|e| {
+            format!("failed parsing metric {}. {}", s, e)
+        })?;
+
+        Ok(RepMetric { metric: metric })
     }
 }
