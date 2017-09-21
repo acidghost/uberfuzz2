@@ -95,6 +95,7 @@ impl Driver {
             .args(&["-l", &self.fuzzer_log_filename])
             .args(&["-p", &ports])
             .args(&["-d", &self.data_path])
+            .args(&["-j", &self.fuzzer_corpus_path])
             .arg("--").args(&self.sut)
             .stdout(Stdio::from(file))
             // FIXME: .stderr(Stdio::from(file))

@@ -33,6 +33,8 @@ typedef struct driver {
     void *use_sub;
     void *metric_rep;
     const char *data_path;
+    const char *inject_path;
+    size_t injected_n;
     HashTable *coverage_info;
 } driver_t;
 
@@ -299,6 +301,87 @@ compute_metric(driver_t *driver, const char *cov_filename, metric_fn_t f, float 
 }
 
 
+static bool
+inject_into_fuzzer(driver_t *driver, const char *input_path)
+{
+    int input_fd = open(input_path, O_RDONLY);
+    if (input_fd == -1) {
+        PLOG_F("failed to open file to read %s", input_path);
+        return false;
+    }
+
+    char injected_filename[PATH_MAX];
+    snprintf(injected_filename, PATH_MAX - 1, "%s/" INPUT_FMT,
+        driver->inject_path, driver->injected_n);
+
+    int injected_fd = open(injected_filename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (injected_fd == -1) {
+        PLOG_F("failed to open file to write %s", injected_filename);
+        close(input_fd);
+        return false;
+    }
+
+    uint8_t buf[BUF_SZ];
+    while (1) {
+        ssize_t read_res = read(input_fd, buf, sizeof(buf));
+        if (read_res == 0) {
+            break;
+        } else if (read_res == -1) {
+            PLOG_F("failed to read from %s", input_path);
+            close(input_fd);
+            close(injected_fd);
+            return false;
+        }
+
+        int write_res = write(injected_fd, buf, read_res);
+        if (write_res != read_res) {
+            if (write_res == -1) {
+                PLOG_F("failed to write to %s", injected_filename);
+            } else {
+                LOG_F("failed to write to %s (written != read)", injected_filename);
+            }
+
+            close(input_fd);
+            close(injected_fd);
+            return false;
+        }
+    }
+
+    close(input_fd);
+    close(injected_fd);
+
+    driver->injected_n++;
+    return true;
+}
+
+
+static bool
+use_input(driver_t *driver, const char *input_path, const char *coverage_path)
+{
+    branch_t *cov_info = NULL;
+    ssize_t cov_count = load_coverage_info(coverage_path, &cov_info);
+    if (cov_count < 0) {
+        LOG_F("failed to read coverage info from %s", coverage_path);
+        return false;
+    }
+
+    bool coverage_added = add_coverage_info(driver, cov_info, cov_count);
+    free(cov_info);
+
+    if (!coverage_added) {
+        LOG_F("failed to add coverage info from %s", coverage_path);
+        return false;
+    }
+
+    if (!inject_into_fuzzer(driver, input_path)) {
+        LOG_E("failed to inject into fuzzer");
+        return false;
+    }
+
+    return true;
+}
+
+
 static int
 driver_loop(driver_t *driver)
 {
@@ -404,7 +487,11 @@ driver_loop(driver_t *driver)
 
             if (strcmp(fuzzer_id, driver->fuzzer_id) == 0) {
                 LOG_I("using %s", input_path);
-                // TODO: inject into fuzzer
+                if (!use_input(driver, input_path, coverage_path)) {
+                    LOG_F("failed to use input");
+                    ret = EXIT_FAILURE;
+                    break;
+                }
             }
         }
 
@@ -501,7 +588,7 @@ static void
 usage(const char *progname)
 {
     printf("usage: %s -i fuzzer_id -f fuzzer_cmd [-s .section] -b r2bb.sh "
-           "-c corpus -p p1,p2,p3 -d data_path [-l fuzzer_log] "
+           "-c corpus -p i,u,m -d data_path -j inject_path [-l fuzzer_log] "
            "-- command [args]\n", progname);
 }
 
@@ -518,7 +605,7 @@ main(int argc, char const *argv[]) {
     memset(driver, 0, sizeof(driver_t));
 
     int opt;
-    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:")) != -1) {
+    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:")) != -1) {
         switch (opt) {
         case 'i':
             driver->fuzzer_id = optarg;
@@ -547,12 +634,17 @@ main(int argc, char const *argv[]) {
         case 'l':
             driver->fuzzer_log_filename = optarg;
             break;
+        case 'j':
+            driver->inject_path = optarg;
+            break;
         }
     }
 
     if (argc == optind || driver->fuzzer_id == NULL ||
         basic_block_script == NULL || driver->fuzzer_corpus_path == NULL ||
-        queues_ports_str == NULL || driver->data_path == NULL) {
+        queues_ports_str == NULL || driver->data_path == NULL ||
+        driver->inject_path == NULL)
+    {
         free_driver(driver);
         usage(argv[0]);
         exit(EXIT_FAILURE);
