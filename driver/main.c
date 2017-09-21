@@ -144,7 +144,8 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
     const uint64_t sec_start = sec_bounds ? sec_bounds->sec_start : 0;
     const uint64_t sec_end = sec_bounds ? sec_bounds->sec_end : 0;
 
-    branch_t branches[count];
+    branch_t *branches = malloc(sizeof(branch_t) * count);
+    assert(branches != NULL);
     size_t branches_i = 0;
     for (uint64_t i = 0; i < count; i++) {
         bts_branch_t branch = bts_start[i];
@@ -197,7 +198,9 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         fclose(coverage_file);
         return false;
     }
+    fflush(coverage_file);
     fclose(coverage_file);
+    free(branches);
 
     // store input to file
     char input_filename[PATH_MAX];
@@ -214,6 +217,7 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         fclose(input_file);
         return false;
     }
+    fflush(input_file);
     fclose(input_file);
 
     // send zmq message
@@ -425,12 +429,15 @@ parse_fuzzer_cmd(driver_t *driver, const char *fuzzer_cmd_filename)
     char buf[PATH_MAX];
     size_t i = 0;
     while (fgets(buf, PATH_MAX - 1, f) != NULL) {
-        size_t len = strlen(buf);
-        driver->fuzzer[i] = malloc(sizeof(char) * len);
+        size_t len = strlen(buf) - 1;                   // skip newline
+        buf[len] = '\0';
+        driver->fuzzer[i] = malloc(sizeof(char) * (len + 1));
         assert(driver->fuzzer[i] != NULL);
-        strncpy(driver->fuzzer[i], buf, len - 1);       // skip newline
+        strncpy(driver->fuzzer[i], buf, len + 1);
         i++;
     }
+
+    fclose(f);
 
     driver->fuzzer_n = i;
     driver->fuzzer[i] = NULL;
@@ -465,6 +472,17 @@ free_driver(driver_t *driver)
         zmq_close(driver->use_sub);
     if (driver->metric_rep)
         zmq_close(driver->metric_rep);
+
+    if (driver->coverage_info) {
+        HashTableIter hti;
+        hashtable_iter_init(&hti, driver->coverage_info);
+        TableEntry *entry = NULL;
+        while (hashtable_iter_next(&hti, &entry) != CC_ITER_END) {
+            free(entry->key);
+            free(entry->value);
+        }
+        hashtable_destroy(driver->coverage_info);
+    }
 
     free(driver);
 }
