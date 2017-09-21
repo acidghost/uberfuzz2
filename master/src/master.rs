@@ -139,6 +139,7 @@ impl Master {
         }
 
         'outer: while !interrupted.load(Ordering::Relaxed) {
+            // check drivers liveness
             for (fuzzer_id, process) in &mut self.processes {
                 match process.try_wait() {
                     Ok(Some(status)) => {
@@ -154,19 +155,19 @@ impl Master {
                 }
             }
 
-            if let Some(interesting_input) = self.pull_interesting() {
-                info!("new input from {}", interesting_input.fuzzer_id);
-
-                let metrics = self.evaluate_interesting(interesting_input);
-                let mut metrics_str = String::new();
-                for (k, v) in &metrics {
-                    metrics_str += &format!(" ({} {})", k, v.metric);
+            // try pulling new interesting input and process any
+            match self.pull_interesting() {
+                Ok(Some(interesting)) => {
+                    if let Err(e) = self.process_interesting(interesting) {
+                        error!("failed to process interesting: {}", e);
+                        break;
+                    }
+                },
+                Ok(None) => (),
+                Err(e) => {
+                    error!("failed to pull interesting: {}", e);
+                    break;
                 }
-                info!("metrics:{}", metrics_str);
-
-                let winning_driver = Master::metric_winner(&metrics, true);
-                info!("winning driver: {}", winning_driver);
-                // TODO: assign input to winning driver
             }
         }
 
@@ -175,19 +176,35 @@ impl Master {
         }
     }
 
-    fn pull_interesting(&self) -> Option<InterestingInput> {
+    fn pull_interesting(&self) -> Result<Option<InterestingInput>, String> {
         match self.interesting_pull.as_ref().unwrap().recv_bytes(zmq::DONTWAIT) {
-            Ok(bytes) => {
-                let interesting_input = String::from_utf8_lossy(&bytes).parse().unwrap();
-                Some(interesting_input)
-            },
-            Err(zmq::Error::EAGAIN) => None,
-            Err(error) => panic!("pull_interesting error {:?}", error)
+            Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).parse()?)),
+            Err(zmq::Error::EAGAIN) => Ok(None),
+            Err(error) => Err(error.to_string())
         }
     }
 
+    fn process_interesting(&self, interesting_input: InterestingInput)
+        -> Result<(), String>
+    {
+        info!("new input from {}", interesting_input.fuzzer_id);
+
+        let metrics = self.evaluate_interesting(interesting_input)?;
+        let mut metrics_str = String::new();
+        for (k, v) in &metrics {
+            metrics_str += &format!(" ({} {})", k, v.metric);
+        }
+        info!("metrics:{}", metrics_str);
+
+        let winning_driver = Master::metric_winner(&metrics, true)?;
+        info!("winning driver: {}", winning_driver);
+        // TODO: assign input to winning driver
+
+        Ok(())
+    }
+
     fn evaluate_interesting(&self, interesting_input: InterestingInput)
-        -> HashMap<&String, RepMetric>
+        -> Result<HashMap<&String, RepMetric>, String>
     {
         let mut metrics = HashMap::new();
         let request = ReqMetric { coverage_path: interesting_input.coverage_path };
@@ -195,31 +212,43 @@ impl Master {
             if *fuzzer_id == interesting_input.fuzzer_id {
                 continue;
             }
-            metric_socket.send_str(&request.to_string(), 0).unwrap();
-            let rep_bytes = metric_socket.recv_bytes(0).unwrap();
-            let rep = String::from_utf8_lossy(&rep_bytes).parse().unwrap();
+
+            metric_socket.send_str(&request.to_string(), 0).map_err(|e| {
+                format!("error sending metric req to {}: {}", fuzzer_id, e)
+            })?;
+
+            let rep_bytes = metric_socket.recv_bytes(0).map_err(|e| {
+                format!("error receiving metric rep from {}: {}", fuzzer_id, e)
+            })?;
+
+            let rep = String::from_utf8_lossy(&rep_bytes).parse().map_err(|e| {
+                format!("error parsing metric rep from {}: {}", fuzzer_id, e)
+            })?;
+
             metrics.insert(fuzzer_id, rep);
         }
-        metrics
+
+        Ok(metrics)
     }
 
     fn metric_winner<'a>(metrics: &HashMap<&'a String, RepMetric>, highest: bool)
-        -> &'a String
+        -> Result<&'a String, String>
     {
         let mut iter = metrics.iter();
-        let (mut winning_key, mut winning_val) = iter.next().unwrap();
-        for (k, v) in iter {
-            let update = if highest {
-                v.metric > winning_val.metric
-            } else {
-                v.metric < winning_val.metric
-            };
+        let (mut winning_key, mut winning_val) = match iter.next() {
+            Some(x) => x,
+            None => return Err("metrics hashmap is empty".to_string())
+        };
 
-            if update {
+        for (k, v) in iter {
+            if (highest && v.metric > winning_val.metric) ||
+                (!highest && v.metric < winning_val.metric)
+            {
                 winning_val = v;
                 winning_key = k;
             }
         }
-        winning_key
+
+        Ok(winning_key)
     }
 }

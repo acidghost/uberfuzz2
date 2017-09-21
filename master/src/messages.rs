@@ -10,14 +10,27 @@ pub struct InterestingInput {
 }
 
 impl FromStr for InterestingInput {
-    type Err = ();
-    fn from_str(s: &str) -> Result<InterestingInput, ()> {
+    type Err = String;
+    fn from_str(s: &str) -> Result<InterestingInput, String> {
         let mut splitted = s.split(" ");
-        let interesting_input = InterestingInput {
-            fuzzer_id: splitted.nth(0).unwrap().to_string().clone(),
-            input_path: splitted.nth(0).unwrap().to_string().clone(),
-            coverage_path: splitted.nth(0).unwrap().to_string().clone()
+
+        let mut parse_next = |field_name| {
+            match splitted.next() {
+                Some(x) => Ok(x),
+                None => Err(format!("unable to parse {} from '{}'", field_name, s))
+            }
         };
+
+        let fuzzer_id = parse_next("fuzzer_id")?;
+        let input_path = parse_next("input_path")?;
+        let coverage_path = parse_next("coverage_path")?;
+
+        let interesting_input = InterestingInput {
+            fuzzer_id: fuzzer_id.to_string().clone(),
+            input_path: input_path.to_string().clone(),
+            coverage_path: coverage_path.to_string().clone()
+        };
+
         Ok(interesting_input)
     }
 }
@@ -45,11 +58,14 @@ pub struct RepMetric {
 }
 
 impl FromStr for RepMetric {
-    type Err = ();
-    fn from_str(s: &str) -> Result<RepMetric, ()> {
+    type Err = String;
+    fn from_str(s: &str) -> Result<RepMetric, String> {
         Ok(
             RepMetric {
-                metric: s.parse().unwrap()
+                metric: match s.parse() {
+                    Ok(f) => f,
+                    Err(e) => return Err(format!("failed parsing metric {}. {}", s, e))
+                }
             }
         )
     }
