@@ -11,7 +11,7 @@ use ctrlc;
 use zmq;
 
 use driver::{Driver, FuzzerType};
-use messages::{InterestingInput, UseInput};
+use messages::{InterestingInput, ReqMetric, RepMetric};
 
 
 pub const INTERESTING_PORT: u32 = 1337;
@@ -90,7 +90,7 @@ impl Master {
     }
 
     pub fn start(&mut self) {
-        println!("starting master (SUT {})", self.sut.first().unwrap());
+        info!("starting master (SUT {})", self.sut.first().unwrap());
 
         let context = zmq::Context::new();
 
@@ -98,7 +98,7 @@ impl Master {
             let socket = context.socket(zmq::PULL).expect("failed to create interesting socket");
             let address = &format!("{}:{}", BIND_ADDR, INTERESTING_PORT);
             socket.bind(address).expect(&format!("failed to bind interesting socket to {}", address));
-            println!("bind 'interesting' socket {}", address);
+            info!("bind 'interesting' socket {}", address);
             self.interesting_pull = Some(socket);
         }
 
@@ -106,14 +106,14 @@ impl Master {
             let socket = context.socket(zmq::PUB).expect("failed to create use socket");
             let address = &format!("{}:{}", BIND_ADDR, USE_PORT);
             socket.bind(address).expect(&format!("failed to bind use socket to {}", address));
-            println!("bind 'use' socket {}", address);
+            info!("bind 'use' socket {}", address);
             self.use_pub = Some(socket);
         }
 
         // spawn drivers
         for (fuzzer_id, driver) in &self.drivers {
             self.processes.insert(fuzzer_id.clone(), driver.spawn());
-            println!("started {}", fuzzer_id);
+            info!("started {}", fuzzer_id);
         }
 
         // setup ctrlc handler
@@ -143,20 +143,30 @@ impl Master {
                 match process.try_wait() {
                     Ok(Some(status)) => {
                         let status_str = if status.success() {"normally"} else {"with error"};
-                        println!("{} exited {}", fuzzer_id, status_str);
+                        warn!("{} exited {}", fuzzer_id, status_str);
                         break 'outer;
                     },
                     Ok(None) => (),
                     Err(e) => {
-                        println!("{}", e);
+                        error!("{}", e);
                         break 'outer;
                     }
                 }
             }
 
             if let Some(interesting_input) = self.pull_interesting() {
-                println!("{:?}", interesting_input);
-                // TODO: propagate interesting_input
+                info!("new input from {}", interesting_input.fuzzer_id);
+
+                let metrics = self.evaluate_interesting(interesting_input);
+                let mut metrics_str = String::new();
+                for (k, v) in &metrics {
+                    metrics_str += &format!(" ({} {})", k, v.metric);
+                }
+                info!("metrics:{}", metrics_str);
+
+                let winning_driver = Master::metric_winner(&metrics, true);
+                info!("winning driver: {}", winning_driver);
+                // TODO: assign input to winning driver
             }
         }
 
@@ -168,18 +178,48 @@ impl Master {
     fn pull_interesting(&self) -> Option<InterestingInput> {
         match self.interesting_pull.as_ref().unwrap().recv_bytes(zmq::DONTWAIT) {
             Ok(bytes) => {
-                let mut message_cow = String::from_utf8_lossy(&bytes);
-                let mut splitted = message_cow.to_mut().split(" ");
-                let interesting_input = InterestingInput {
-                    fuzzer_id: splitted.nth(0).unwrap().to_string().clone(),
-                    input_path: splitted.nth(0).unwrap().to_string().clone(),
-                    coverage_path: splitted.nth(0).unwrap().to_string().clone()
-                };
-
+                let interesting_input = String::from_utf8_lossy(&bytes).parse().unwrap();
                 Some(interesting_input)
             },
             Err(zmq::Error::EAGAIN) => None,
             Err(error) => panic!("pull_interesting error {:?}", error)
         }
+    }
+
+    fn evaluate_interesting(&self, interesting_input: InterestingInput)
+        -> HashMap<&String, RepMetric>
+    {
+        let mut metrics = HashMap::new();
+        let request = ReqMetric { coverage_path: interesting_input.coverage_path };
+        for (fuzzer_id, metric_socket) in &self.metric_reqs {
+            if *fuzzer_id == interesting_input.fuzzer_id {
+                continue;
+            }
+            metric_socket.send_str(&request.to_string(), 0).unwrap();
+            let rep_bytes = metric_socket.recv_bytes(0).unwrap();
+            let rep = String::from_utf8_lossy(&rep_bytes).parse().unwrap();
+            metrics.insert(fuzzer_id, rep);
+        }
+        metrics
+    }
+
+    fn metric_winner<'a>(metrics: &HashMap<&'a String, RepMetric>, highest: bool)
+        -> &'a String
+    {
+        let mut iter = metrics.iter();
+        let (mut winning_key, mut winning_val) = iter.next().unwrap();
+        for (k, v) in iter {
+            let update = if highest {
+                v.metric > winning_val.metric
+            } else {
+                v.metric < winning_val.metric
+            };
+
+            if update {
+                winning_val = v;
+                winning_key = k;
+            }
+        }
+        winning_key
     }
 }
