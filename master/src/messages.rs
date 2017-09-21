@@ -11,7 +11,7 @@ pub struct InterestingInput {
 
 impl FromStr for InterestingInput {
     type Err = String;
-    fn from_str(s: &str) -> Result<InterestingInput, String> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut splitted = s.split(" ");
 
         let mut parse_next = |field_name| {
@@ -59,7 +59,7 @@ pub struct RepMetric {
 
 impl FromStr for RepMetric {
     type Err = String;
-    fn from_str(s: &str) -> Result<RepMetric, String> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let metric = s.parse().map_err(|e| {
             format!("failed parsing metric {}. {}", s, e)
         })?;
