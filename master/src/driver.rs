@@ -40,6 +40,7 @@ pub struct Driver {
     fuzzer_cmd_filename: String,
     basic_block_script: String,
     fuzzer_corpus_path: String,
+    fuzzer_log_filename: String,
     interesting_port: u32,
     use_port: u32,
     metric_port: u32,
@@ -70,6 +71,7 @@ impl Driver {
             fuzzer_cmd_filename: format!("{}/{}.conf", work_path, fuzzer_id),
             basic_block_script: basic_block_script.into().unwrap_or(DEFAULT_BB_SCRIPT.to_string()),
             fuzzer_corpus_path: format!("{}/{}/{}", work_path, fuzzer_id, corpus_path),
+            fuzzer_log_filename: format!("{}/{}.fuzz.log", work_path, fuzzer_id),
             interesting_port: interesting_port.into().unwrap_or(master::INTERESTING_PORT),
             use_port: use_port.into().unwrap_or(master::USE_PORT),
             metric_port: metric_port,
@@ -90,6 +92,7 @@ impl Driver {
             .args(&["-f", &self.fuzzer_cmd_filename])
             .args(&["-b", &self.basic_block_script])
             .args(&["-c", &self.fuzzer_corpus_path])
+            .args(&["-l", &self.fuzzer_log_filename])
             .args(&["-p", &ports])
             .args(&["-d", &self.data_path])
             .arg("--").args(&self.sut)

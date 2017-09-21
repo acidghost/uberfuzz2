@@ -23,6 +23,7 @@ typedef struct driver {
     char **fuzzer;
     size_t fuzzer_n;
     const char **sut;
+    const char *fuzzer_log_filename;
     const char *fuzzer_corpus_path;
     section_bounds_t *sec_bounds;
     basic_block_t *bbs;
@@ -66,13 +67,20 @@ start_fuzzer(driver_t *driver)
         return -1;
     } else if (pid == 0) {
         // child, run fuzzer
-        int null_fd = open("/dev/null", O_WRONLY);
-        if (null_fd == -1) {
-            PLOG_F("failed to open /dev/null");
+        const char *filename = driver->fuzzer_log_filename == NULL ?
+                                "/dev/null" : driver->fuzzer_log_filename;
+
+        int fd = driver->fuzzer_log_filename == NULL ?
+                open(filename, O_WRONLY) :
+                open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+        if (fd == -1) {
+            PLOG_F("failed to open %s", filename);
             abort();
         }
-        dup2(null_fd, STDOUT_FILENO);
-        dup2(null_fd, STDERR_FILENO);
+
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
         execv(driver->fuzzer[0], driver->fuzzer);
         PLOG_F("failed to execv fuzzer");
         abort();
@@ -337,6 +345,7 @@ driver_loop(driver_t *driver)
                 break;
             }
         }
+        usleep(100);
 
         uint8_t zmq_recv_buf[RECV_BUF_SZ];
         memset(zmq_recv_buf, 0, RECV_BUF_SZ);
@@ -358,6 +367,7 @@ driver_loop(driver_t *driver)
                 ret = EXIT_FAILURE;
                 break;
             }
+            LOG_I("computed metric %f", metric);
 
             char zmq_send_buf[RECV_BUF_SZ];
             snprintf(zmq_send_buf, RECV_BUF_SZ, "%f", metric);
@@ -370,6 +380,7 @@ driver_loop(driver_t *driver)
         }
 
         memset(zmq_recv_buf, 0, RECV_BUF_SZ);
+        usleep(100);
 
         // 3. look for new inputs to use/fuzz -> inject into fuzzer
         size = zmq_recv(driver->use_sub, zmq_recv_buf, RECV_BUF_SZ-1, ZMQ_DONTWAIT);
@@ -463,7 +474,8 @@ static void
 usage(const char *progname)
 {
     printf("usage: %s -i fuzzer_id -f fuzzer_cmd [-s .section] -b r2bb.sh "
-           "-c corpus -p p1,p2,p3 -d data_path -- command [args]\n", progname);
+           "-c corpus -p p1,p2,p3 -d data_path [-l fuzzer_log] "
+           "-- command [args]\n", progname);
 }
 
 
@@ -479,7 +491,7 @@ main(int argc, char const *argv[]) {
     memset(driver, 0, sizeof(driver_t));
 
     int opt;
-    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:")) != -1) {
+    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:")) != -1) {
         switch (opt) {
         case 'i':
             driver->fuzzer_id = optarg;
@@ -504,6 +516,9 @@ main(int argc, char const *argv[]) {
             break;
         case 'd':
             driver->data_path = optarg;
+            break;
+        case 'l':
+            driver->fuzzer_log_filename = optarg;
             break;
         }
     }
