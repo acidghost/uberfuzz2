@@ -2,6 +2,8 @@
 
 conf_files="`ls *.conf`"
 
+rm -rf ./*.log
+
 for conf_file in $conf_files; do
   folder="${conf_file%.*}"
   echo "Setting up ${folder}"
