@@ -296,6 +296,7 @@ compute_metric(driver_t *driver, const char *cov_filename, metric_fn_t f, float 
     }
 
     *score = f(driver, cov_info, cov_count);
+    free(cov_info);
 
     return true;
 }
