@@ -52,8 +52,8 @@ typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
 #define RECV_BUF_SZ         (1024)
 #define HASH_KEY_SEP        "/"
 #define HASH_KEY_SZ         64
-#define COV_FMT             "%05zu.%zu.coverage"
-#define INPUT_FMT           "%05zu.input"
+#define COV_FMT             "id:%05zu.%zu.coverage"
+#define INPUT_FMT           "id:%05zu.input"
 #define METRIC_FN           &metric_diff
 #define SUB_TOPIC           "A"
 
