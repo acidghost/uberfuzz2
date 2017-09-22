@@ -19,6 +19,16 @@ pub enum FuzzerType {
     VUzzer
 }
 
+impl FuzzerType {
+    fn get_inject_path(&self) -> &'static str {
+        match self {
+            &FuzzerType::AFL => "out/inject/queue",
+            &FuzzerType::Honggfuzz => "out/inject",
+            &FuzzerType::VUzzer => "out"
+        }
+    }
+}
+
 impl FromStr for FuzzerType {
     type Err = ();
     fn from_str(s: &str) -> Result<FuzzerType, ()> {
@@ -45,6 +55,7 @@ pub struct Driver {
     use_port: u32,
     metric_port: u32,
     data_path: String,
+    inject_path: String,
     sut: Vec<String>,
     log_filename: String
 }
@@ -55,14 +66,17 @@ impl Driver {
                        interesting_port: OU, use_port: OU, work_path: OS, section_name: OS,
                        basic_block_script: OS) -> Driver
                        where OS: Into<Option<String>>,
-                             OU: Into<Option<u32>> {
-
+                             OU: Into<Option<u32>>
+    {
         let work_path = work_path.into().unwrap_or(WORK_PATH.to_string());
+
         let corpus_path = match fuzzer_type {
-            FuzzerType::AFL => "out/queue",
-            FuzzerType::Honggfuzz => "in",
-            FuzzerType::VUzzer => "out"
+            FuzzerType::AFL => format!("out/{}/queue", fuzzer_id),
+            FuzzerType::Honggfuzz => "in".to_string(),
+            FuzzerType::VUzzer => "out".to_string()
         };
+
+        let inject_path = fuzzer_type.get_inject_path();
 
         Driver {
             fuzzer_id: fuzzer_id.clone(),
@@ -76,6 +90,7 @@ impl Driver {
             use_port: use_port.into().unwrap_or(master::USE_PORT),
             metric_port: metric_port,
             data_path: format!("{}/{}/driver", work_path, fuzzer_id),
+            inject_path: format!("{}/{}/{}", work_path, fuzzer_id, inject_path),
             sut: sut,
             log_filename: format!("{}/{}.log", work_path, fuzzer_id)
         }
@@ -95,7 +110,7 @@ impl Driver {
             .args(&["-l", &self.fuzzer_log_filename])
             .args(&["-p", &ports])
             .args(&["-d", &self.data_path])
-            .args(&["-j", &self.fuzzer_corpus_path])
+            .args(&["-j", &self.inject_path])
             .arg("--").args(&self.sut)
             .stdout(Stdio::from(file))
             // FIXME: .stderr(Stdio::from(file))

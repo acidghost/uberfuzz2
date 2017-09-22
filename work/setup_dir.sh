@@ -11,7 +11,7 @@ for conf_file in $conf_files; do
   mkdir $folder
   pushd $folder > /dev/null
   rm -rf out in driver *.log
-  mkdir out in driver
+  mkdir -p out/inject/queue out/${folder} in driver
   echo A > in/seed
   popd > /dev/null
 done
