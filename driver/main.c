@@ -24,6 +24,7 @@ typedef struct driver {
     size_t fuzzer_n;
     pid_t fuzzer_pid;
     const char **sut;
+    const char *sut_input_file;
     const char *fuzzer_log_filename;
     const char *fuzzer_corpus_path;
     section_bounds_t *sec_bounds;
@@ -141,7 +142,8 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
     // collect coverage info, filter it and add to knowledge-base
     bts_branch_t *bts_start;
     uint64_t count;
-    int perf_ret = perf_monitor_api(buf, size, driver->sut, &bts_start, &count);
+    int perf_ret = perf_monitor_api(buf, size, driver->sut, driver->sut_input_file,
+                                    &bts_start, &count);
     if (perf_ret == PERF_FAILURE) {
         LOG_F("failed perf monitoring");
         return false;
@@ -610,6 +612,7 @@ usage(const char *progname)
 {
     printf("usage: %s -i fuzzer_id -f fuzzer_cmd [-s .section] -b r2bb.sh "
            "-c corpus -p i,u,m -d data_path -j inject_path [-l fuzzer_log] "
+           "[-F input_filename] "
            "-- command [args]\n", progname);
 }
 
@@ -626,7 +629,7 @@ main(int argc, char const *argv[]) {
     memset(driver, 0, sizeof(driver_t));
 
     int opt;
-    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:")) != -1) {
+    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:F:")) != -1) {
         switch (opt) {
         case 'i':
             driver->fuzzer_id = optarg;
@@ -657,6 +660,9 @@ main(int argc, char const *argv[]) {
             break;
         case 'j':
             driver->inject_path = optarg;
+            break;
+        case 'F':
+            driver->sut_input_file = optarg;
             break;
         }
     }

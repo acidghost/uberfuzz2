@@ -277,23 +277,24 @@ void perf_monitor(char const **argv)
 
 
 int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **argv,
-                         bts_branch_t **bts_start, uint64_t *count)
+                         const char *in_file, bts_branch_t **bts_start, uint64_t *count)
 {
     perf_close();
     if (!perf_init()) {
         return PERF_FAILURE;
     }
 
-    int in_fd = open("./.input", O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
+    const char *input_filename = in_file == NULL ? "./.input" : in_file;
+    int in_fd = open(input_filename, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
     if (in_fd == -1) {
-        PLOG_F("failed to open input file");
+        PLOG_F("failed to open %s", input_filename);
         return PERF_FAILURE;
     }
     ssize_t write_sz = write(in_fd, data, data_count);
     if (write_sz == -1) {
-        PLOG_F("failed to write to input file");
+        PLOG_F("failed to write to %s", input_filename);
         close(in_fd);
-        unlink("./.input");
+        unlink(input_filename);
         return PERF_FAILURE;
     }
     close(in_fd);
@@ -301,27 +302,25 @@ int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **ar
     gbl_status.child_pid = fork();
     if (gbl_status.child_pid < 0) {
         PLOG_F("failed to fork");
-        unlink("./.input");
+        unlink(input_filename);
         return PERF_FAILURE;
     } else if (gbl_status.child_pid > 0) {
         close(in_fd);
         int32_t ret = perf_parent(bts_start, count);
-        unlink("./.input");
+        unlink(input_filename);
         return ret;
     } else {
-        in_fd = open("./.input", O_RDONLY);
-        if (in_fd == -1) {
-            PLOG_F("failed to open input file");
-            return PERF_FAILURE;
+        if (in_file == NULL) {
+            in_fd = open(input_filename, O_RDONLY);
+            if (in_fd == -1) {
+                PLOG_F("failed to open %s", input_filename);
+                return PERF_FAILURE;
+            }
+            dup2(in_fd, STDIN_FILENO);
+            close(in_fd);
         }
-        dup2(in_fd, STDIN_FILENO);
-        close(in_fd);
         perf_child(argv);
         LOG_M("returning from child...");
-        // raise(SIGKILL);
         return 0;
-        // kill(getpid(), 9);
-        // _exit(1);
-        // abort();
     }
 }

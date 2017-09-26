@@ -79,11 +79,11 @@ impl Master {
         opts.optmulti("f", "fuzzer", "Pair of fuzzer id and fuzzer type", "aflfast,afl");
         opts.optflag("w", "winning-high", "High or low winning strategy");
         opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
+        opts.optflag("s", "stdin", "Target reads from standard input");
 
         let matches = opts.parse(&args[1..]).map_err(|f| f.to_string())?;
-        let sut = &matches.free;
 
-        if matches.opt_present("h") || sut.is_empty() || matches.opt_count("f") < 2 {
+        if matches.opt_present("h") || matches.free.is_empty() || matches.opt_count("f") < 2 {
             return Err(Master::usage(&program, opts));
         }
 
@@ -96,8 +96,16 @@ impl Master {
                 .parse::<FuzzerType>().expect("wrong fuzzer type");
 
             let wp = WORK_PATH.to_string();
+            let sut_input_file = if matches.opt_present("s") {
+                Some(format!("{}/.{}.input", wp, fuzzer_id))
+            } else { None };
+            let sut = matches.free.iter().map(|s| {
+                if s == "@@" { sut_input_file.clone().unwrap_or(s.to_string()) }
+                else { s.to_string() }
+            }).collect();
+
             drivers_map.insert(fuzzer_id.clone(),
-                Driver::with_defaults(fuzzer_id, fuzzer_type, sut.clone(), metric_port, wp));
+                Driver::with_defaults(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, wp));
 
             metric_port += 1;
         }
@@ -113,7 +121,7 @@ impl Master {
         };
 
         let m = Master {
-            sut: sut.clone(),
+            sut: matches.free.clone(),
             winning_strategy: winning_strategy,
             drivers: drivers_map,
             processes: HashMap::new(),

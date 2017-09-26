@@ -56,20 +56,24 @@ pub struct Driver {
     data_path: String,
     inject_path: String,
     sut: Vec<String>,
+    sut_input_file: Option<String>,
     log_filename: String
 }
 
 
 impl Driver {
     pub fn with_defaults(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                         metric_port: u32, work_path: String) -> Driver
+                         sut_input_file: Option<String>, metric_port: u32, work_path: String)
+                         -> Driver
     {
-        Driver::new(fuzzer_id, fuzzer_type, sut, metric_port, work_path, None, None, None, None)
+        Driver::new(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, work_path,
+            None, None, None, None)
     }
 
     pub fn new<OS, OU>(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                       metric_port: u32, work_path: String, interesting_port: OU, use_port: OU,
-                       section_name: OS, basic_block_script: OS) -> Driver
+                       sut_input_file: Option<String>, metric_port: u32, work_path: String,
+                       interesting_port: OU, use_port: OU, section_name: OS,
+                       basic_block_script: OS) -> Driver
                        where OS: Into<Option<String>>,
                              OU: Into<Option<u32>>
     {
@@ -95,6 +99,7 @@ impl Driver {
             data_path: format!("{}/{}/driver", work_path, fuzzer_id),
             inject_path: format!("{}/{}/{}", work_path, fuzzer_id, inject_path),
             sut: sut,
+            sut_input_file: sut_input_file,
             log_filename: format!("{}/{}.log", work_path, fuzzer_id)
         }
     }
@@ -104,17 +109,27 @@ impl Driver {
         let file: File = File::create(&self.log_filename)
             .expect(&format!("failed to create {}", self.log_filename));
 
+        let mut args = vec![
+            "-i", &self.fuzzer_id,
+            "-s", &self.section_name,
+            "-f", &self.fuzzer_cmd_filename,
+            "-b", &self.basic_block_script,
+            "-c", &self.fuzzer_corpus_path,
+            "-l", &self.fuzzer_log_filename,
+            "-p", &ports,
+            "-d", &self.data_path,
+            "-j", &self.inject_path
+        ];
+
+        if let Some(ref sut_input_file) = self.sut_input_file {
+            args.extend_from_slice(&["-F", sut_input_file]);
+        }
+
+        args.push("--");
+        args.extend_from_slice(&self.sut.iter().map(|s| s.as_ref()).collect::<Vec<_>>());
+
         Command::new(DRIVER_EXE)
-            .args(&["-i", &self.fuzzer_id])
-            .args(&["-s", &self.section_name])
-            .args(&["-f", &self.fuzzer_cmd_filename])
-            .args(&["-b", &self.basic_block_script])
-            .args(&["-c", &self.fuzzer_corpus_path])
-            .args(&["-l", &self.fuzzer_log_filename])
-            .args(&["-p", &ports])
-            .args(&["-d", &self.data_path])
-            .args(&["-j", &self.inject_path])
-            .arg("--").args(&self.sut)
+            .args(&args)
             .stdout(Stdio::from(file))
             // FIXME: .stderr(Stdio::from(file))
             .spawn()
