@@ -4,8 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define LINE_SZ  (1024)
-#define BBS_SZ   (1024 * sizeof(basic_block_t))
+#define LINE_SZ         1024
+#define BBS_MAX_N       10240
+#define BBS_SZ          (BBS_MAX_N * sizeof(basic_block_t))
 
 
 ssize_t basic_blocks_find(const char *r2bb_script, const char *bin, basic_block_t **bbs)
@@ -27,7 +28,7 @@ ssize_t basic_blocks_find(const char *r2bb_script, const char *bin, basic_block_
     memset(*bbs, 0, BBS_SZ);
     size_t bbs_n = 0;
     while (fgets(line, LINE_SZ, stream) != NULL) {
-        assert(bbs_n < BBS_SZ);
+        assert(bbs_n < BBS_MAX_N);
         char *col = strtok(line, " ");
         uint8_t col_idx = 0;
         while (col != NULL) {
