@@ -22,6 +22,7 @@ typedef struct driver {
     const char *fuzzer_id;
     char **fuzzer;
     size_t fuzzer_n;
+    pid_t fuzzer_pid;
     const char **sut;
     const char *fuzzer_log_filename;
     const char *fuzzer_corpus_path;
@@ -390,12 +391,12 @@ static int
 driver_loop(driver_t *driver)
 {
     int ret = EXIT_SUCCESS;
-    pid_t fuzzer_pid = start_fuzzer(driver);
-    if (fuzzer_pid == -1) {
+    driver->fuzzer_pid = start_fuzzer(driver);
+    if (driver->fuzzer_pid == -1) {
         LOG_F("failed to start fuzzer %s", driver->fuzzer[0]);
         return EXIT_FAILURE;
     } else {
-        LOG_I("fuzzer %s started (pid=%d)", driver->fuzzer[0], fuzzer_pid);
+        LOG_I("fuzzer %s started (pid=%d)", driver->fuzzer[0], driver->fuzzer_pid);
     }
 
     int watch_d = 0;
@@ -406,14 +407,14 @@ driver_loop(driver_t *driver)
     }
 
     while (keep_running) {
-        if (kill(fuzzer_pid, 0) == -1 && errno == ESRCH) {
+        if (kill(driver->fuzzer_pid, 0) == -1 && errno == ESRCH) {
             LOG_I("fuzzer stopped, exiting");
             break;
         }
 
         if (!keep_running) {
-            if (kill(fuzzer_pid, SIGKILL) == -1) {
-                PLOG_F("failed to kill fuzzer (pid=%d)", fuzzer_pid);
+            if (kill(driver->fuzzer_pid, SIGKILL) == -1) {
+                PLOG_F("failed to kill fuzzer (pid=%d)", driver->fuzzer_pid);
                 ret = EXIT_FAILURE;
             }
             break;
@@ -594,6 +595,10 @@ free_driver(driver_t *driver)
             free(entry->value);
         }
         hashtable_destroy(driver->coverage_info);
+    }
+
+    if (driver->fuzzer_pid > 0 && kill(driver->fuzzer_pid, SIGKILL) == -1) {
+        PLOG_W("failed to kill fuzzer (pid=%d)", driver->fuzzer_pid);
     }
 
     free(driver);
