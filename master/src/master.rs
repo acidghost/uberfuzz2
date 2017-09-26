@@ -71,9 +71,8 @@ impl Master {
             let fuzzer_type = splitted.next().expect("fuzzer type missing")
                 .parse::<FuzzerType>().expect("wrong fuzzer type");
 
-            let driver = Driver::new(fuzzer_id.clone(), fuzzer_type, sut.clone(), metric_port,
-                None, None, None, None, None);
-            drivers_map.insert(fuzzer_id, driver);
+            drivers_map.insert(fuzzer_id.clone(),
+                Driver::with_defaults(fuzzer_id, fuzzer_type, sut.clone(), metric_port));
 
             metric_port += 1;
         }
