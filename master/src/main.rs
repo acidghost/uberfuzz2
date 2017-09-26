@@ -3,6 +3,7 @@ extern crate pretty_env_logger;
 extern crate zmq;
 extern crate ctrlc;
 extern crate nix;
+extern crate getopts;
 
 mod driver;
 mod master;

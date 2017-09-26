@@ -10,9 +10,9 @@ pub struct InterestingInput {
 }
 
 impl InterestingInput {
-    pub fn with_new_fuzzer_id(&self, fuzzer_id: &String) -> InterestingInput {
-        InterestingInput {
-            fuzzer_id: fuzzer_id.clone(),
+    pub fn use_for(&self, fuzzer_ids: &[&str]) -> UseInput {
+        UseInput {
+            fuzzer_ids: fuzzer_ids.iter().map(|f| f.to_string()).collect(),
             input_path: self.input_path.clone(),
             coverage_path: self.coverage_path.clone()
         }
@@ -45,10 +45,18 @@ impl FromStr for InterestingInput {
     }
 }
 
-impl ToString for InterestingInput {
+
+#[derive(Debug)]
+pub struct UseInput {
+    fuzzer_ids: Vec<String>,
+    input_path: String,
+    coverage_path: String
+}
+
+impl ToString for UseInput {
     fn to_string(&self) -> String {
         // the 'A' is the subscription topic, by subscribing to it drivers can receive all messages
-        format!("A {} {} {}", self.fuzzer_id, self.input_path, self.coverage_path)
+        format!("A {} {} {}", self.fuzzer_ids.join("_"), self.input_path, self.coverage_path)
     }
 }
 

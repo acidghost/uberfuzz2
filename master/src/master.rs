@@ -10,6 +10,8 @@ use nix::unistd::Pid;
 use ctrlc;
 use zmq;
 
+use getopts::Options;
+
 use driver::{Driver, FuzzerType};
 use messages::{InterestingInput, ReqMetric, RepMetric};
 
@@ -21,8 +23,15 @@ const BIND_ADDR: &'static str = "tcp://*";
 const CONN_ADDR: &'static str = "tcp://localhost";
 
 
+enum WinningStrategy {
+    SingleWinner(bool),
+    MultipleWinners(f64, bool)
+}
+
+
 pub struct Master {
     sut: Vec<String>,
+    winning_strategy: WinningStrategy,
     drivers: HashMap<String, Driver>,
     processes: HashMap<String, Child>,
     interesting_pull: Option<zmq::Socket>,
@@ -32,51 +41,64 @@ pub struct Master {
 
 
 impl Master {
-    pub fn from_args<'a>() -> Result<Master, &'a str> {
-        let mut sut = vec![];
-        let mut do_sut = false;
+    fn usage(program: &str, opts: Options) -> String {
+        let brief = format!("usage: {} [options] -- target [args]", program);
+        opts.usage(&brief)
+    }
+
+    pub fn from_args() -> Result<Master, String> {
+        let args: Vec<String> = env::args().collect();
+        let program = args[0].clone();
+
+        let mut opts = Options::new();
+        opts.optflag("h", "help", "Print this help");
+        opts.optmulti("f", "fuzzer", "Pair of fuzzer id and fuzzer type", "aflfast,afl");
+        opts.optflag("w", "winning-high", "High or low winning strategy");
+        opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
+
+        let matches = opts.parse(&args[1..]).map_err(|f| f.to_string())?;
+        let sut = &matches.free;
+
+        if matches.opt_present("h") || sut.is_empty() || matches.opt_count("f") < 2 {
+            return Err(Master::usage(&program, opts));
+        }
+
+        let mut drivers_map = HashMap::new();
         let mut metric_port = METRIC_PORT_START;
-        let mut drivers = vec![];
-        for arg in env::args().skip(1) {
-            match arg.as_str() {
-                x if do_sut => sut.push(x.to_string()),
-                "--" => do_sut = true,
-                x => {
-                    let s = x.to_string();
-                    let mut splitted = s.split(",");
-                    let driver = (
-                        splitted.next().expect("only one argument for fuzzer").to_string(),
-                        splitted.next().expect("fuzzer type missing")
-                            .parse::<FuzzerType>().expect("wrong fuzzer type"),
-                        metric_port);
-                    drivers.push(driver);
-                    metric_port += 1;
-                }
-            }
+        for fuzzer_str in matches.opt_strs("f") {
+            let mut splitted = fuzzer_str.split(",");
+            let fuzzer_id = splitted.next().expect("only one argument for fuzzer").to_string();
+            let fuzzer_type = splitted.next().expect("fuzzer type missing")
+                .parse::<FuzzerType>().expect("wrong fuzzer type");
+
+            let driver = Driver::new(fuzzer_id.clone(), fuzzer_type, sut.clone(), metric_port,
+                None, None, None, None, None);
+            drivers_map.insert(fuzzer_id, driver);
+
+            metric_port += 1;
         }
 
-        if !(drivers.len() > 1 && sut.len() > 0) {
-            Err("usage: master fID,fType -- sut [args]")
-        } else {
-            let mut drivers_map = HashMap::new();
-            for driver_data in drivers {
-                let (fuzzer_id, fuzzer_type, metric_port) = driver_data;
-                let driver = Driver::new(fuzzer_id.clone(), fuzzer_type, sut.clone(), metric_port,
-                    None, None, None, None, None);
-                drivers_map.insert(fuzzer_id, driver);
-            }
+        let winning_strategy = match matches.opt_str("t") {
+            Some(threshold_str) => {
+                let threshold = threshold_str.parse().map_err(|e| {
+                    format!("unable to parse {} as threshold: {}", threshold_str, e)
+                })?;
+                WinningStrategy::MultipleWinners(threshold, matches.opt_present("w"))
+            },
+            None => WinningStrategy::SingleWinner(matches.opt_present("w"))
+        };
 
-            let m = Master {
-                sut: sut,
-                drivers: drivers_map,
-                processes: HashMap::new(),
-                interesting_pull: None,
-                use_pub: None,
-                metric_reqs: HashMap::new()
-            };
+        let m = Master {
+            sut: sut.clone(),
+            winning_strategy: winning_strategy,
+            drivers: drivers_map,
+            processes: HashMap::new(),
+            interesting_pull: None,
+            use_pub: None,
+            metric_reqs: HashMap::new()
+        };
 
-            Ok(m)
-        }
+        Ok(m)
     }
 
     fn stop(&mut self) {
@@ -190,23 +212,25 @@ impl Master {
         info!("new input from {}", interesting_input.fuzzer_id);
 
         let metrics = self.evaluate_interesting(&interesting_input)?;
-        let mut metrics_str = String::new();
-        for (k, v) in &metrics {
-            metrics_str += &format!(" ({} {})", k, v.metric);
+        info!("metrics:{}", metrics.iter().map(|t| format!("({} {})", t.0, t.1.metric))
+            .collect::<Vec<_>>().join(" "));
+
+        let winning_drivers = self.metric_winners(&metrics)?;
+
+        if !winning_drivers.is_empty() {
+            let winning_drivers_str = winning_drivers.join(" - ");
+            info!("winning drivers: {}", winning_drivers_str);
+            self.assign_input(&interesting_input, &winning_drivers)?;
+            info!("input sent to {}", winning_drivers_str);
+        } else {
+            debug!("no winning driver");
         }
-        info!("metrics:{}", metrics_str);
-
-        let winning_driver = Master::metric_winner(&metrics, true)?;
-        info!("winning driver is {}", winning_driver);
-
-        self.assign_input(&interesting_input, winning_driver)?;
-        info!("input sent to {}", winning_driver);
 
         Ok(())
     }
 
     fn evaluate_interesting(&self, interesting_input: &InterestingInput)
-        -> Result<HashMap<&String, RepMetric>, String>
+        -> Result<HashMap<&str, RepMetric>, String>
     {
         let mut metrics = HashMap::new();
         let request = ReqMetric { coverage_path: interesting_input.coverage_path.clone() };
@@ -227,14 +251,29 @@ impl Master {
                 format!("error parsing metric rep from {}: {}", fuzzer_id, e)
             })?;
 
-            metrics.insert(fuzzer_id, rep);
+            metrics.insert(fuzzer_id.as_str(), rep);
         }
 
         Ok(metrics)
     }
 
-    fn metric_winner<'a>(metrics: &HashMap<&'a String, RepMetric>, highest: bool)
-        -> Result<&'a String, String>
+    fn metric_winners<'a>(&self, metrics: &HashMap<&'a str, RepMetric>)
+        -> Result<Vec<&'a str>, String>
+    {
+        match self.winning_strategy {
+            WinningStrategy::SingleWinner(highest) => {
+                let winning_driver = Master::metric_single_winner(&metrics, highest)?;
+                Ok(vec![winning_driver])
+            },
+            WinningStrategy::MultipleWinners(threshold, higher) => {
+                let winning_drivers = Master::metric_multiple_winners(&metrics, threshold, higher)?;
+                Ok(winning_drivers)
+            }
+        }
+    }
+
+    fn metric_single_winner<'a>(metrics: &HashMap<&'a str, RepMetric>, highest: bool)
+        -> Result<&'a str, String>
     {
         let mut iter = metrics.iter();
         let (mut winning_key, mut winning_val) = match iter.next() {
@@ -254,10 +293,25 @@ impl Master {
         Ok(winning_key)
     }
 
-    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_id: &String)
+    fn metric_multiple_winners<'a>(metrics: &HashMap<&'a str, RepMetric>, threshold: f64, higher: bool)
+        -> Result<Vec<&'a str>, String>
+    {
+        let mut winners = vec![];
+
+        for (k, v) in metrics {
+            if (higher && v.metric > threshold) || (!higher && v.metric < threshold) {
+                winners.push(*k);
+            }
+        }
+
+        Ok(winners)
+
+    }
+
+    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_ids: &[&str])
         -> Result<(), String>
     {
-        let input = interesting_input.with_new_fuzzer_id(fuzzer_id);
+        let input = interesting_input.use_for(fuzzer_ids);
         self.use_pub.as_ref().unwrap().send_str(&input.to_string(), 0).map_err(|e| {
             format!("error publishing input to use: {}", e)
         })

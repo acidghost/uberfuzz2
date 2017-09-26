@@ -56,6 +56,9 @@ typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
 #define INPUT_FMT           "id:%05zu.input"
 #define METRIC_FN           &metric_diff
 #define SUB_TOPIC           "A"
+#define MAX_FUZZERS         16
+#define MAX_FUZZER_ID       16
+#define USE_FUZZ_ID_SEP     "_"
 
 
 bool keep_running = true;
@@ -482,11 +485,23 @@ driver_loop(driver_t *driver)
         } else {
             zmq_recv_buf[size] = '\0';
             // parse 'use' message
-            char fuzzer_id[32], input_path[PATH_MAX], coverage_path[PATH_MAX];
+            char fuzzer_ids_str[MAX_FUZZERS * MAX_FUZZER_ID];
+            char input_path[PATH_MAX], coverage_path[PATH_MAX];
             sscanf((char *) zmq_recv_buf, SUB_TOPIC " %s %s %s",
-                fuzzer_id, input_path, coverage_path);
+                fuzzer_ids_str, input_path, coverage_path);
 
-            if (strcmp(fuzzer_id, driver->fuzzer_id) == 0) {
+            // parse fuzzer ids
+            char *fuzzer_id = strtok(fuzzer_ids_str, USE_FUZZ_ID_SEP);
+            bool use_it = false;
+            while (fuzzer_id != NULL) {
+                if (strcmp(fuzzer_id, driver->fuzzer_id) == 0) {
+                    use_it = true;
+                    break;
+                }
+                fuzzer_id = strtok(NULL, USE_FUZZ_ID_SEP);
+            }
+
+            if (use_it) {
                 LOG_I("using %s", input_path);
                 if (!use_input(driver, input_path, coverage_path)) {
                     LOG_F("failed to use input");
