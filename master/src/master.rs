@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::env;
+use std::fs::File;
+use std::io::prelude::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Child;
+use std::thread;
+use std::time;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -12,10 +16,13 @@ use zmq;
 
 use getopts::Options;
 
+use time::{Duration, PreciseTime};
+
 use driver::{Driver, FuzzerType};
 use messages::{InterestingInput, ReqMetric, RepMetric};
 
 
+const WORK_PATH: &'static str = "./work";
 pub const INTERESTING_PORT: u32 = 1337;
 pub const USE_PORT: u32 = INTERESTING_PORT + 1;
 pub const METRIC_PORT_START: u32 = USE_PORT + 1;
@@ -29,6 +36,19 @@ enum WinningStrategy {
 }
 
 
+struct InterestingWithTime {
+    input_message: InterestingInput,
+    elapsed_time: Duration
+}
+
+impl ToString for InterestingWithTime {
+    fn to_string(&self) -> String {
+        format!("{},{},{},{}", self.elapsed_time.num_milliseconds(), self.input_message.fuzzer_id,
+            self.input_message.input_path, self.input_message.coverage_path)
+    }
+}
+
+
 pub struct Master {
     sut: Vec<String>,
     winning_strategy: WinningStrategy,
@@ -36,7 +56,11 @@ pub struct Master {
     processes: HashMap<String, Child>,
     interesting_pull: Option<zmq::Socket>,
     use_pub: Option<zmq::Socket>,
-    metric_reqs: HashMap<String, zmq::Socket>
+    metric_reqs: HashMap<String, zmq::Socket>,
+    start_time: Option<PreciseTime>,
+    work_path: String,
+    interesting_log: Vec<InterestingWithTime>,
+    interesting_log_file: Option<File>
 }
 
 
@@ -71,8 +95,9 @@ impl Master {
             let fuzzer_type = splitted.next().expect("fuzzer type missing")
                 .parse::<FuzzerType>().expect("wrong fuzzer type");
 
+            let wp = WORK_PATH.to_string();
             drivers_map.insert(fuzzer_id.clone(),
-                Driver::with_defaults(fuzzer_id, fuzzer_type, sut.clone(), metric_port));
+                Driver::with_defaults(fuzzer_id, fuzzer_type, sut.clone(), metric_port, wp));
 
             metric_port += 1;
         }
@@ -94,7 +119,11 @@ impl Master {
             processes: HashMap::new(),
             interesting_pull: None,
             use_pub: None,
-            metric_reqs: HashMap::new()
+            metric_reqs: HashMap::new(),
+            start_time: None,
+            work_path: WORK_PATH.to_string(),
+            interesting_log: vec![],
+            interesting_log_file: None
         };
 
         Ok(m)
@@ -130,6 +159,18 @@ impl Master {
             info!("bind 'use' socket {}", address);
             self.use_pub = Some(socket);
         }
+
+        // open log file
+        let interesting_log_filename = format!("{}/inputs.log", self.work_path);
+        match File::create(&interesting_log_filename) {
+            Ok(file) => self.interesting_log_file = Some(file),
+            Err(error) => {
+                error!("failed to open {}: {}", interesting_log_filename, error);
+                return;
+            }
+        }
+
+        self.start_time = Some(PreciseTime::now());
 
         // spawn drivers
         for (fuzzer_id, driver) in &self.drivers {
@@ -179,6 +220,11 @@ impl Master {
             // try pulling new interesting input and process any
             match self.pull_interesting() {
                 Ok(Some(interesting)) => {
+                    if let Err(e) = self.log_interesting(&interesting) {
+                        error!("failed logging: {}", e);
+                        break;
+                    }
+
                     if let Err(e) = self.process_interesting(interesting) {
                         error!("failed to process interesting: {}", e);
                         break;
@@ -190,6 +236,8 @@ impl Master {
                     break;
                 }
             }
+
+            thread::sleep(time::Duration::from_millis(10));
         }
 
         if !interrupted.load(Ordering::Relaxed) {
@@ -203,6 +251,24 @@ impl Master {
             Err(zmq::Error::EAGAIN) => Ok(None),
             Err(error) => Err(error.to_string())
         }
+    }
+
+    fn log_interesting(&mut self, interesting_input: &InterestingInput)
+        -> Result<(), String>
+    {
+        let interesting_with_time = InterestingWithTime {
+            input_message: interesting_input.clone(),
+            elapsed_time: self.start_time.unwrap().to(PreciseTime::now())
+        };
+
+        if let Some(ref mut file) = self.interesting_log_file {
+            let line = interesting_with_time.to_string() + "\n";
+            file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        }
+
+        self.interesting_log.push(interesting_with_time);
+
+        Ok(())
     }
 
     fn process_interesting(&self, interesting_input: InterestingInput)

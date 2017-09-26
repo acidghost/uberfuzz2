@@ -4,6 +4,7 @@ extern crate zmq;
 extern crate ctrlc;
 extern crate nix;
 extern crate getopts;
+extern crate time;
 
 mod driver;
 mod master;

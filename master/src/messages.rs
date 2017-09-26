@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 // messages exchanged with drivers
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterestingInput {
     pub fuzzer_id: String,
     pub input_path: String,

@@ -6,7 +6,6 @@ use std::process::{Child, Command, Stdio};
 use master;
 
 
-const WORK_PATH: &'static str = "./work";
 const DEFAULT_SECTION: &'static str = ".text";
 const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 const DRIVER_EXE: &'static str = "./driver/driver";
@@ -63,19 +62,17 @@ pub struct Driver {
 
 impl Driver {
     pub fn with_defaults(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                         metric_port: u32) -> Driver
+                         metric_port: u32, work_path: String) -> Driver
     {
-        Driver::new(fuzzer_id, fuzzer_type, sut, metric_port, None, None, None, None, None)
+        Driver::new(fuzzer_id, fuzzer_type, sut, metric_port, work_path, None, None, None, None)
     }
 
     pub fn new<OS, OU>(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                       metric_port: u32, interesting_port: OU, use_port: OU, work_path: OS,
+                       metric_port: u32, work_path: String, interesting_port: OU, use_port: OU,
                        section_name: OS, basic_block_script: OS) -> Driver
                        where OS: Into<Option<String>>,
                              OU: Into<Option<u32>>
     {
-        let work_path = work_path.into().unwrap_or(WORK_PATH.to_string());
-
         let corpus_path = match fuzzer_type {
             FuzzerType::AFL => format!("out/{}/queue", fuzzer_id),
             FuzzerType::Honggfuzz => "in".to_string(),
