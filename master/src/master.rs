@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::prelude::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,7 +76,7 @@ impl Master {
 
         let mut opts = Options::new();
         opts.optflag("h", "help", "Print this help");
-        opts.optmulti("f", "fuzzer", "Pair of fuzzer id and fuzzer type", "aflfast,afl");
+        opts.optmulti("f", "fuzzer", "Fuzzer id (from id.type.conf in work directory)", "aflfast");
         opts.optflag("w", "winning-high", "High or low winning strategy");
         opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
         opts.optflag("s", "stdin", "Target reads from standard input");
@@ -87,18 +87,60 @@ impl Master {
             return Err(Master::usage(&program, opts));
         }
 
+        // collect .conf files from WORK_PATH
+        let work_readdir = fs::read_dir(WORK_PATH).map_err(|e| {
+            format!("failed to read directory {}: {}", WORK_PATH, e)
+        })?;
+
+        let mut conf_files = vec![];
+        for entry in work_readdir {
+            let path = entry.map_err(|e| e.to_string())?.path();
+
+            let valid_file = {
+                let ext_opt = path.extension();
+                path.is_file() && ext_opt.is_some() && ext_opt.unwrap() == "conf"
+            };
+
+            if valid_file {
+                conf_files.push(path);
+            }
+        }
+
+        debug!("found conf files: {:?}", conf_files);
+
         let mut drivers_map = HashMap::new();
         let mut metric_port = METRIC_PORT_START;
-        for fuzzer_str in matches.opt_strs("f") {
-            let mut splitted = fuzzer_str.split(",");
-            let fuzzer_id = splitted.next().expect("only one argument for fuzzer").to_string();
-            let fuzzer_type = splitted.next().expect("fuzzer type missing")
-                .parse::<FuzzerType>().expect("wrong fuzzer type");
+        for fuzzer_id in matches.opt_strs("f") {
+            // find conf file starting with this fuzzer id
+            let conf_path_opt = conf_files.iter().find(|p| {
+                p.to_str().unwrap().contains(&fuzzer_id)
+            });
+
+            if conf_path_opt.is_none() {
+                let e = format!("a config file for {} was not found in {}", fuzzer_id, WORK_PATH);
+                return Err(e);
+            }
+
+            let conf_path = conf_path_opt.unwrap();
+            // parse fuzzer type from conf filename
+            let conf_filename = conf_path.file_name().unwrap().to_string_lossy();
+            let conf_filename_split: Vec<_> = conf_filename.split(".").collect();
+            if conf_filename_split.len() < 3 {
+                return Err(format!("invalid conf filename {}", conf_path.display()));
+            }
+
+            let fuzzer_type: FuzzerType = conf_filename_split[1].parse().map_err(|e| {
+                format!("failed to parse {}: {}", conf_filename_split[1], e)
+            })?;
 
             let wp = WORK_PATH.to_string();
+
+            // set sut input filename (if used)
             let sut_input_file = if matches.opt_present("s") {
                 Some(format!("{}/.{}.input", wp, fuzzer_id))
             } else { None };
+
+            // set input filename (if any) in sut arguments, replacing any '@@' occurrence
             let sut = matches.free.iter().map(|s| {
                 if s == "@@" { sut_input_file.clone().unwrap_or(s.to_string()) }
                 else { s.to_string() }
@@ -349,10 +391,8 @@ impl Master {
         -> Result<&'a str, String>
     {
         let mut iter = metrics.iter();
-        let (mut winning_key, mut winning_val) = match iter.next() {
-            Some(x) => x,
-            None => return Err("metrics hashmap is empty".to_string())
-        };
+        let (mut winning_key, mut winning_val) = iter.next()
+            .ok_or("metrics hashmap is empty".to_string())?;
 
         for (k, v) in iter {
             if (highest && v.metric > winning_val.metric) ||

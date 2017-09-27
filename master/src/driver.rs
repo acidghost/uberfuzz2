@@ -29,13 +29,13 @@ impl FuzzerType {
 }
 
 impl FromStr for FuzzerType {
-    type Err = ();
-    fn from_str(s: &str) -> Result<FuzzerType, ()> {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "afl" => Ok(FuzzerType::AFL),
             "hongg" => Ok(FuzzerType::Honggfuzz),
             "vu" => Ok(FuzzerType::VUzzer),
-            _ => Err(())
+            _ => Err(format!("unable to parse {}", s))
         }
     }
 }

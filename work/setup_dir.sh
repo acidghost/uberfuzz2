@@ -5,8 +5,10 @@ conf_files="`ls *.conf`"
 rm -rf ./*.log
 
 for conf_file in $conf_files; do
-  folder="${conf_file%.*}"
-  echo "Setting up ${folder}"
+  arr=(${conf_file//./ })
+  folder=${arr[0]}
+  ftype=${arr[1]}
+  echo "Setting up ${folder} (type ${ftype})"
   rm -rf $folder
   mkdir $folder
   pushd $folder > /dev/null
