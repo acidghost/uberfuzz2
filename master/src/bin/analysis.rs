@@ -80,7 +80,7 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
     })?;
 
     let fuzzer_ids = find_fuzzer_ids(&file)?;
-    let header_str = "time,".to_string() + &fuzzer_ids.join(",") + "\n";
+    let header_str = "unit,time,".to_string() + &fuzzer_ids.join(",") + "\n";
 
     let coverage_filename = coverage_filename.as_ref();
     let mut coverage_file = File::create(coverage_filename).map_err(|e| {
@@ -135,16 +135,20 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
 
         // log according to time_unit
         if time_unit.is_none() || time_millis - last_time > time_unit.unwrap() {
-            let coverage_str = format!("{},", time_millis) + &fuzzer_ids.iter().map(|f| {
-                format!("{}", coverage.get(f).unwrap().len())
-            }).collect::<Vec<_>>().join(",") + "\n";
+            let this_time_unit = time_unit.map(|t| time_millis / t);
+
+            let coverage_str = format!("{},{},", this_time_unit.unwrap_or(time_millis), time_millis)
+                + &fuzzer_ids.iter().map(|f| {
+                    format!("{}", coverage.get(f).unwrap().len())
+                }).collect::<Vec<_>>().join(",") + "\n";
             coverage_file.write_all(coverage_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", coverage_filename.to_string_lossy(), e)
             })?;
 
-            let interesting_str = format!("{},", time_millis) + &fuzzer_ids.iter().map(|f| {
-                format!("{}", interesting.get(f).unwrap())
-            }).collect::<Vec<_>>().join(",") + "\n";
+            let interesting_str = format!("{},{},", this_time_unit.unwrap_or(time_millis), time_millis)
+                + &fuzzer_ids.iter().map(|f| {
+                    format!("{}", interesting.get(f).unwrap())
+                }).collect::<Vec<_>>().join(",") + "\n";
             interesting_file.write_all(interesting_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", interesting_filename.to_string_lossy(), e)
             })?;
