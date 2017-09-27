@@ -25,10 +25,7 @@ impl FromStr for InterestingInput {
         let mut splitted = s.split(" ");
 
         let mut parse_next = |field_name| {
-            match splitted.next() {
-                Some(x) => Ok(x),
-                None => Err(format!("unable to parse {} from '{}'", field_name, s))
-            }
+            splitted.next().ok_or(format!("unable to parse {} from '{}'", field_name, s))
         };
 
         let fuzzer_id = parse_next("fuzzer_id")?;
