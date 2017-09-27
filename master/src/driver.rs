@@ -11,7 +11,7 @@ const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 const DRIVER_EXE: &'static str = "./driver/driver";
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum FuzzerType {
     AFL,
     Honggfuzz,
@@ -37,6 +37,16 @@ impl FromStr for FuzzerType {
             "vu" => Ok(FuzzerType::VUzzer),
             _ => Err(format!("unable to parse {}", s))
         }
+    }
+}
+
+impl ToString for FuzzerType {
+    fn to_string(&self) -> String {
+        match self {
+            &FuzzerType::AFL => "afl",
+            &FuzzerType::Honggfuzz => "hongg",
+            &FuzzerType::VUzzer => "vu"
+        }.to_string()
     }
 }
 
@@ -89,7 +99,7 @@ impl Driver {
             fuzzer_id: fuzzer_id.clone(),
             fuzzer_type: fuzzer_type,
             section_name: section_name.into().unwrap_or(DEFAULT_SECTION.to_string()),
-            fuzzer_cmd_filename: format!("{}/{}.conf", work_path, fuzzer_id),
+            fuzzer_cmd_filename: format!("{}/{}.{}.conf", work_path, fuzzer_id, fuzzer_type.to_string()),
             basic_block_script: basic_block_script.into().unwrap_or(DEFAULT_BB_SCRIPT.to_string()),
             fuzzer_corpus_path: format!("{}/{}/{}", work_path, fuzzer_id, corpus_path),
             fuzzer_log_filename: format!("{}/{}.fuzz.log", work_path, fuzzer_id),
