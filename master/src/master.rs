@@ -77,7 +77,7 @@ impl Master {
         let mut opts = Options::new();
         opts.optflag("h", "help", "Print this help");
         opts.optmulti("f", "fuzzer", "Fuzzer id (from id.type.conf in work directory)", "aflfast");
-        opts.optflag("w", "winning-high", "High or low winning strategy");
+        opts.optflag("H", "high", "High or low winning strategy");
         opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
         opts.optflag("s", "stdin", "Target reads from standard input");
 
@@ -157,9 +157,9 @@ impl Master {
                 let threshold = threshold_str.parse().map_err(|e| {
                     format!("unable to parse {} as threshold: {}", threshold_str, e)
                 })?;
-                WinningStrategy::MultipleWinners(threshold, matches.opt_present("w"))
+                WinningStrategy::MultipleWinners(threshold, matches.opt_present("H"))
             },
-            None => WinningStrategy::SingleWinner(matches.opt_present("w"))
+            None => WinningStrategy::SingleWinner(matches.opt_present("H"))
         };
 
         let m = Master {
