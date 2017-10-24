@@ -374,16 +374,24 @@ impl Master {
     fn metric_winners<'a>(&self, metrics: &HashMap<&'a str, RepMetric>)
         -> Result<Vec<&'a str>, String>
     {
-        match self.winning_strategy {
+        let mut winning_drivers = match self.winning_strategy {
             WinningStrategy::SingleWinner(highest) => {
-                let winning_driver = Master::metric_single_winner(&metrics, highest)?;
-                Ok(vec![winning_driver])
+                vec![Master::metric_single_winner(&metrics, highest)?]
             },
             WinningStrategy::MultipleWinners(threshold, higher) => {
-                let winning_drivers = Master::metric_multiple_winners(&metrics, threshold, higher)?;
-                Ok(winning_drivers)
+                Master::metric_multiple_winners(&metrics, threshold, higher)?
             }
-        }
+        };
+
+        winning_drivers.retain(move |driver| {
+            if let Some(v) = metrics.get(driver) {
+                v.metric > 0.0
+            } else {
+                false
+            }
+        });
+
+        Ok(winning_drivers)
     }
 
     fn metric_single_winner<'a>(metrics: &HashMap<&'a str, RepMetric>, highest: bool)
