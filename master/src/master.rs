@@ -136,9 +136,8 @@ impl Master {
             let wp = WORK_PATH.to_string();
 
             // set sut input filename (if used)
-            let sut_input_file = if matches.opt_present("s") {
-                Some(format!("{}/.{}.input", wp, fuzzer_id))
-            } else { None };
+            let sut_input_file = if matches.opt_present("s") { None }
+                else { Some(format!("{}/.{}.input", wp, fuzzer_id)) };
 
             // set input filename (if any) in sut arguments, replacing any '@@' occurrence
             let sut = matches.free.iter().map(|s| {
