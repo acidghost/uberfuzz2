@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 #define LINE_SZ         1024
-#define BBS_MAX_N       10240
+#define BBS_MAX_N       102400
 #define BBS_SZ          (BBS_MAX_N * sizeof(basic_block_t))
 
 
