@@ -25,6 +25,7 @@ typedef struct driver {
     pid_t fuzzer_pid;
     const char **sut;
     const char *sut_input_file;
+    bool sut_use_stdin;
     const char *fuzzer_log_filename;
     const char *fuzzer_corpus_path;
     section_bounds_t *sec_bounds;
@@ -61,6 +62,7 @@ typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
 #define MAX_FUZZERS         16
 #define MAX_FUZZER_ID       16
 #define USE_FUZZ_ID_SEP     "_"
+#define WORK_PATH           "./work"        // TODO: make it a cmd line option?
 
 
 bool keep_running = true;
@@ -143,7 +145,7 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
     bts_branch_t *bts_start;
     uint64_t count;
     int perf_ret = perf_monitor_api(buf, size, driver->sut, driver->sut_input_file,
-                                    &bts_start, &count);
+                                    driver->sut_use_stdin, &bts_start, &count);
     if (perf_ret == PERF_FAILURE) {
         LOG_F("failed perf monitoring");
         return false;
@@ -627,6 +629,7 @@ main(int argc, char const *argv[]) {
     driver_t *driver = malloc(sizeof(driver_t));
     assert(driver != NULL);
     memset(driver, 0, sizeof(driver_t));
+    driver->sut_use_stdin = true;
 
     int opt;
     while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:F:")) != -1) {
@@ -663,6 +666,7 @@ main(int argc, char const *argv[]) {
             break;
         case 'F':
             driver->sut_input_file = optarg;
+            driver->sut_use_stdin = false;
             break;
         }
     }
@@ -675,6 +679,12 @@ main(int argc, char const *argv[]) {
         free_driver(driver);
         usage(argv[0]);
         exit(EXIT_FAILURE);
+    }
+
+    if (driver->sut_use_stdin) {
+        char *tmp = malloc(PATH_MAX * sizeof(char));
+        snprintf(tmp, PATH_MAX - 1, "%s/.%s.input", WORK_PATH, driver->fuzzer_id);
+        driver->sut_input_file = tmp;
     }
 
     driver->sut = argv + optind;

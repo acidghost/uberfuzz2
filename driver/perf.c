@@ -277,14 +277,14 @@ void perf_monitor(char const **argv)
 
 
 int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **argv,
-                         const char *in_file, bts_branch_t **bts_start, uint64_t *count)
+                         const char *input_filename, const bool use_stdin,
+                         bts_branch_t **bts_start, uint64_t *count)
 {
     perf_close();
     if (!perf_init()) {
         return PERF_FAILURE;
     }
 
-    const char *input_filename = in_file == NULL ? "./.input" : in_file;
     int in_fd = open(input_filename, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
     if (in_fd == -1) {
         PLOG_F("failed to open %s", input_filename);
@@ -310,7 +310,7 @@ int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **ar
         unlink(input_filename);
         return ret;
     } else {
-        if (in_file == NULL) {
+        if (use_stdin) {
             in_fd = open(input_filename, O_RDONLY);
             if (in_fd == -1) {
                 PLOG_F("failed to open %s", input_filename);
