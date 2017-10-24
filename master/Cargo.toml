@@ -11,3 +11,4 @@ ctrlc = { version = "3.0", features = ["termination"] }
 nix = "0.9.0"
 getopts = "0.2"
 time = "0.1"
+rand = "0.3"

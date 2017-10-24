@@ -5,6 +5,7 @@ extern crate ctrlc;
 extern crate nix;
 extern crate getopts;
 extern crate time;
+extern crate rand;
 
 mod driver;
 mod master;

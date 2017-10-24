@@ -18,6 +18,8 @@ use getopts::Options;
 
 use time::{Duration, PreciseTime};
 
+use rand::{Rng, thread_rng};
+
 use driver::{Driver, FuzzerType};
 use messages::{InterestingInput, ReqMetric, RepMetric};
 
@@ -374,34 +376,40 @@ impl Master {
     fn metric_winners<'a>(&self, metrics: &HashMap<&'a str, RepMetric>)
         -> Result<Vec<&'a str>, String>
     {
-        let mut winning_drivers = match self.winning_strategy {
+        let winning_drivers = match self.winning_strategy {
             WinningStrategy::SingleWinner(highest) => {
-                vec![Master::metric_single_winner(&metrics, highest)?]
+                if let Some(w) = Master::metric_single_winner(&metrics, highest)? {
+                    vec![w]
+                } else {
+                    vec![]
+                }
             },
             WinningStrategy::MultipleWinners(threshold, higher) => {
                 Master::metric_multiple_winners(&metrics, threshold, higher)?
             }
         };
 
-        winning_drivers.retain(move |driver| {
-            if let Some(v) = metrics.get(driver) {
-                v.metric > 0.0
-            } else {
-                false
-            }
-        });
-
         Ok(winning_drivers)
     }
 
     fn metric_single_winner<'a>(metrics: &HashMap<&'a str, RepMetric>, highest: bool)
-        -> Result<&'a str, String>
+        -> Result<Option<&'a str>, String>
     {
-        let mut iter = metrics.iter();
-        let (mut winning_key, mut winning_val) = iter.next()
+        if metrics.iter().all(|tpl| tpl.1.metric == 0.0) {
+            return Ok(None);
+        }
+
+        // shuffling is done so that in cases where the metrics are all equal a different one gets
+        // picked each time
+        let mut metrics_vec: Vec<_> = metrics.iter().collect();
+        thread_rng().shuffle(metrics_vec.as_mut_slice());
+
+        let mut iter = metrics_vec.iter();
+        let (mut winning_key, mut winning_val) = *iter.next()
             .ok_or("metrics hashmap is empty".to_string())?;
 
-        for (k, v) in iter {
+        for tpl in iter {
+            let (k, v) = *tpl;
             if (highest && v.metric > winning_val.metric) ||
                 (!highest && v.metric < winning_val.metric)
             {
@@ -410,7 +418,7 @@ impl Master {
             }
         }
 
-        Ok(winning_key)
+        Ok(Some(winning_key))
     }
 
     fn metric_multiple_winners<'a>(metrics: &HashMap<&'a str, RepMetric>, threshold: f64, higher: bool)
