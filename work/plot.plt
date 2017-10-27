@@ -10,4 +10,5 @@ end=system("expr ".nfuzzers." + 2")
 fuzzers=system("head -n1 ".filename." | cut -d' ' -f".start."-".end)
 
 set title system("basename ".filename)
+set yrange [* < 0:10 < *]
 plot for [i=1:nfuzzers] filename u "unit":word(fuzzers, i) t word(fuzzers, i) w lp
