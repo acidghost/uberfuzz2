@@ -7,6 +7,7 @@ extern crate getopts;
 extern crate time;
 extern crate rand;
 
+mod common;
 mod driver;
 mod master;
 mod messages;

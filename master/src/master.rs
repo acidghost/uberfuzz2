@@ -22,9 +22,9 @@ use rand::{Rng, thread_rng};
 
 use driver::{Driver, FuzzerType};
 use messages::{InterestingInput, ReqMetric, RepMetric};
+use common::{LOG_LINE_SEPARATOR, WORK_PATH};
 
 
-const WORK_PATH: &'static str = "./work";
 pub const INTERESTING_PORT: u32 = 1337;
 pub const USE_PORT: u32 = INTERESTING_PORT + 1;
 pub const METRIC_PORT_START: u32 = USE_PORT + 1;
@@ -45,8 +45,9 @@ struct InterestingWithTime {
 
 impl ToString for InterestingWithTime {
     fn to_string(&self) -> String {
-        format!("{},{},{},{}", self.elapsed_time.num_milliseconds(), self.input_message.fuzzer_id,
-            self.input_message.input_path, self.input_message.coverage_path)
+        format!("{}{sep}{}{sep}{}{sep}{}", self.elapsed_time.num_milliseconds(),
+            self.input_message.fuzzer_id, self.input_message.input_path,
+            self.input_message.coverage_path, sep=LOG_LINE_SEPARATOR)
     }
 }
 
@@ -62,7 +63,8 @@ pub struct Master {
     start_time: Option<PreciseTime>,
     work_path: String,
     interesting_log: Vec<InterestingWithTime>,
-    interesting_log_file: Option<File>
+    interesting_log_file: Option<File>,
+    winning_log_file: Option<File>
 }
 
 
@@ -174,7 +176,8 @@ impl Master {
             start_time: None,
             work_path: WORK_PATH.to_string(),
             interesting_log: vec![],
-            interesting_log_file: None
+            interesting_log_file: None,
+            winning_log_file: None
         };
 
         Ok(m)
@@ -211,12 +214,22 @@ impl Master {
             self.use_pub = Some(socket);
         }
 
-        // open log file
+        // open inputs log file
         let interesting_log_filename = format!("{}/inputs.log", self.work_path);
         match File::create(&interesting_log_filename) {
             Ok(file) => self.interesting_log_file = Some(file),
             Err(error) => {
                 error!("failed to open {}: {}", interesting_log_filename, error);
+                return;
+            }
+        }
+
+        // open winning log file
+        let winning_log_filename = format!("{}/winning.log", self.work_path);
+        match File::create(&winning_log_filename) {
+            Ok(file) => self.winning_log_file = Some(file),
+            Err(error) => {
+                error!("failed to open {}: {}", winning_log_filename, error);
                 return;
             }
         }
@@ -322,31 +335,44 @@ impl Master {
         Ok(())
     }
 
-    fn process_interesting(&self, interesting_input: InterestingInput)
+    fn process_interesting(&mut self, interesting_input: InterestingInput)
         -> Result<(), String>
     {
-        info!("new input from {}", interesting_input.fuzzer_id);
+        let start_processing_duration = self.start_time.unwrap().to(PreciseTime::now());
 
         let metrics = self.evaluate_interesting(&interesting_input)?;
-        info!("metrics:{}", metrics.iter().map(|t| format!("({} {})", t.0, t.1.metric))
-            .collect::<Vec<_>>().join(" "));
 
         let winning_drivers = self.metric_winners(&metrics)?;
 
         if !winning_drivers.is_empty() {
-            let winning_drivers_str = winning_drivers.join(" - ");
-            info!("winning drivers: {}", winning_drivers_str);
             self.assign_input(&interesting_input, &winning_drivers)?;
-            info!("input sent to {}", winning_drivers_str);
-        } else {
-            debug!("no winning driver");
+
+            // log competition
+            if let Some(ref mut file) = self.winning_log_file {
+                let mut winning_drivers_sort = winning_drivers.clone();
+                winning_drivers_sort.sort();
+                let line = format!("{}{sep}{}{sep}{}\n",
+                    start_processing_duration.num_milliseconds(), interesting_input.fuzzer_id,
+                    winning_drivers_sort.join("_"), sep=LOG_LINE_SEPARATOR);
+                file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+            }
         }
+
+        info!("{:02}:{:02}:{:02} - {} - {} - {}",
+               start_processing_duration.num_hours(),
+               start_processing_duration.num_minutes() % 60,
+               start_processing_duration.num_seconds() % 60,
+               interesting_input.fuzzer_id,
+               metrics.iter().map(|t| format!("{} {}", t.0, t.1.metric))
+                   .collect::<Vec<_>>().join(" / "),
+               if winning_drivers.len() > 0 { winning_drivers.join(" ") }
+               else { "none".to_string() });
 
         Ok(())
     }
 
     fn evaluate_interesting(&self, interesting_input: &InterestingInput)
-        -> Result<HashMap<&str, RepMetric>, String>
+        -> Result<HashMap<String, RepMetric>, String>
     {
         let mut metrics = HashMap::new();
         let request = ReqMetric { coverage_path: interesting_input.coverage_path.clone() };
@@ -367,14 +393,14 @@ impl Master {
                 format!("error parsing metric rep from {}: {}", fuzzer_id, e)
             })?;
 
-            metrics.insert(fuzzer_id.as_str(), rep);
+            metrics.insert(fuzzer_id.clone(), rep);
         }
 
         Ok(metrics)
     }
 
-    fn metric_winners<'a>(&self, metrics: &HashMap<&'a str, RepMetric>)
-        -> Result<Vec<&'a str>, String>
+    fn metric_winners(&self, metrics: &HashMap<String, RepMetric>)
+        -> Result<Vec<String>, String>
     {
         let winning_drivers = match self.winning_strategy {
             WinningStrategy::SingleWinner(highest) => {
@@ -392,8 +418,8 @@ impl Master {
         Ok(winning_drivers)
     }
 
-    fn metric_single_winner<'a>(metrics: &HashMap<&'a str, RepMetric>, highest: bool)
-        -> Result<Option<&'a str>, String>
+    fn metric_single_winner(metrics: &HashMap<String, RepMetric>, highest: bool)
+        -> Result<Option<String>, String>
     {
         if metrics.iter().all(|tpl| tpl.1.metric == 0.0) {
             return Ok(None);
@@ -418,17 +444,17 @@ impl Master {
             }
         }
 
-        Ok(Some(winning_key))
+        Ok(Some(winning_key.clone()))
     }
 
-    fn metric_multiple_winners<'a>(metrics: &HashMap<&'a str, RepMetric>, threshold: f64, higher: bool)
-        -> Result<Vec<&'a str>, String>
+    fn metric_multiple_winners(metrics: &HashMap<String, RepMetric>, threshold: f64, higher: bool)
+        -> Result<Vec<String>, String>
     {
         let mut winners = vec![];
 
         for (k, v) in metrics {
             if (higher && v.metric > threshold) || (!higher && v.metric < threshold) {
-                winners.push(*k);
+                winners.push(k.clone());
             }
         }
 
@@ -436,7 +462,7 @@ impl Master {
 
     }
 
-    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_ids: &[&str])
+    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_ids: &[String])
         -> Result<(), String>
     {
         let input = interesting_input.use_for(fuzzer_ids);

@@ -6,12 +6,17 @@ use std::mem;
 use std::path::Path;
 use std::slice;
 use std::ops::Add;
+use std::process::exit;
 
 extern crate pretty_env_logger;
 #[macro_use] extern crate log;
 
 extern crate getopts;
 use getopts::Options;
+
+#[path="../common.rs"]
+mod common;
+use common::{LOG_LINE_SEPARATOR, WORK_PATH};
 
 
 static SEPARATOR: &'static str = " ";
@@ -29,7 +34,7 @@ type BranchCounts = HashMap<Branch, usize>;
 
 // format is time,fuzzer_ids,input_path,coverage_path
 fn parse_line(line: &String) -> Result<(u64, &str, &str, &str), String> {
-    let splitted: Vec<_> = line.split(",").collect();
+    let splitted: Vec<_> = line.split(LOG_LINE_SEPARATOR).collect();
     if splitted.len() != 4 {
         return Err(format!("line '{}' has not 4 columns", line));
     }
@@ -191,10 +196,13 @@ fn main() {
 
     let mut opts = Options::new();
     opts.optflag("h", "help", "Print this help");
-    opts.optopt("f", "file", "The inputs.log file to analyze", "./work/inputs.log");
+    opts.optopt("f", "file", "The inputs.log file to analyze",
+        format!("{}/inputs.log", WORK_PATH).as_str());
     opts.optopt("t", "time-unit", "The time unit to use to sample coverage", "1000");
-    opts.optopt("c", "coverage", "Where to store coverage info", "./work/coverage.log");
-    opts.optopt("i", "interesting", "Where to store interesting info", "./work/interesting.log");
+    opts.optopt("c", "coverage", "Where to store coverage info",
+        format!("{}/coverage.log", WORK_PATH).as_str());
+    opts.optopt("i", "interesting", "Where to store interesting info",
+        format!("{}/interesting.log", WORK_PATH).as_str());
 
     let args: Vec<_> = env::args().collect();
     let matches = opts.parse(&args[1..]).map_err(|f| f.to_string()).unwrap();
@@ -213,5 +221,6 @@ fn main() {
 
     if let Err(e) = process_file(&filename, &coverage_filename, &interesting_filename, time_unit) {
         error!("{}", e);
+        exit(1);
     }
 }

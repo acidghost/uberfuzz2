@@ -10,7 +10,7 @@ pub struct InterestingInput {
 }
 
 impl InterestingInput {
-    pub fn use_for(&self, fuzzer_ids: &[&str]) -> UseInput {
+    pub fn use_for(&self, fuzzer_ids: &[String]) -> UseInput {
         UseInput {
             fuzzer_ids: fuzzer_ids.iter().map(|f| f.to_string()).collect(),
             input_path: self.input_path.clone(),
