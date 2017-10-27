@@ -264,6 +264,8 @@ impl Master {
             self.metric_reqs.insert(fuzzer_id.clone(), socket);
         }
 
+        let mut pulled_interesting = false;
+        let mut pending_newline = false;
         'outer: while !interrupted.load(Ordering::Relaxed) {
             // check drivers liveness
             for (fuzzer_id, process) in &mut self.processes {
@@ -284,6 +286,11 @@ impl Master {
             // try pulling new interesting input and process any
             match self.pull_interesting() {
                 Ok(Some(interesting)) => {
+                    if pending_newline {
+                        print!("\r");
+                        pending_newline = false;
+                    }
+                    pulled_interesting = true;
                     if let Err(e) = self.log_interesting(&interesting) {
                         error!("failed logging: {}", e);
                         break;
@@ -294,7 +301,16 @@ impl Master {
                         break;
                     }
                 },
-                Ok(None) => (),
+                Ok(None) => {
+                    if !pulled_interesting && pending_newline {
+                        print!("\r");
+                    }
+                    let t = self.start_time.unwrap().to(PreciseTime::now());
+                    print!("{:02}:{:02}:{:02}",
+                        t.num_hours(), t.num_minutes() % 60, t.num_seconds() % 60);
+                    pulled_interesting = false;
+                    pending_newline = true;
+                },
                 Err(e) => {
                     error!("failed to pull interesting: {}", e);
                     break;
@@ -358,15 +374,15 @@ impl Master {
             }
         }
 
-        info!("{:02}:{:02}:{:02} - {} - {} - {}",
-               start_processing_duration.num_hours(),
-               start_processing_duration.num_minutes() % 60,
-               start_processing_duration.num_seconds() % 60,
-               interesting_input.fuzzer_id,
-               metrics.iter().map(|t| format!("{} {}", t.0, t.1.metric))
-                   .collect::<Vec<_>>().join(" / "),
-               if winning_drivers.len() > 0 { winning_drivers.join(" ") }
-               else { "none".to_string() });
+        println!("{:02}:{:02}:{:02} - {} - {} - {}",
+            start_processing_duration.num_hours(),
+            start_processing_duration.num_minutes() % 60,
+            start_processing_duration.num_seconds() % 60,
+            interesting_input.fuzzer_id,
+            metrics.iter().map(|t| format!("{} {}", t.0, t.1.metric))
+             .collect::<Vec<_>>().join(" / "),
+            if winning_drivers.len() > 0 { winning_drivers.join(" ") }
+            else { "none".to_string() });
 
         Ok(())
     }
