@@ -34,7 +34,7 @@ fi
 # replace './work' in inputs log with `work_path`
 inputs_tmp="${inputs}.tmp"
 sed "s,./work,${work_path},g" $inputs > $inputs_tmp
-../master/target/debug/analysis -t $timestep -f $inputs_tmp -c $coverage -i $interesting
+../master/target/debug/inputs -t $timestep -f $inputs_tmp -c $coverage -i $interesting
 rm $inputs_tmp
 
 gnuplot -p -c $plot $coverage $nfuzzers
