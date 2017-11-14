@@ -43,6 +43,7 @@ typedef struct driver {
     bool single_mode;
     struct timespec start_time;
     ssize_t interesting_log_fd;
+    ssize_t coverage_log_fd;
 } driver_t;
 
 
@@ -73,7 +74,7 @@ bool keep_running = true;
 
 
 static uint64_t
-get_delta_millis(struct timespec *start)
+get_delta_micro(struct timespec *start)
 {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC_RAW, &now);
@@ -125,9 +126,10 @@ coverage_info_key(branch_t *branch)
 }
 
 
-static bool
+static ssize_t
 add_coverage_info(driver_t *driver, branch_t *coverage_info, size_t count)
 {
+    ssize_t added_unique_branches = 0;
     for (size_t i = 0; i < count; i++) {
         branch_t branch = coverage_info[i];
         char *key = coverage_info_key(&branch);
@@ -140,14 +142,15 @@ add_coverage_info(driver_t *driver, branch_t *coverage_info, size_t count)
             value = malloc(sizeof(uint64_t));
             assert(value != NULL);
             *value = 1;
+            added_unique_branches++;
             if (hashtable_add(driver->coverage_info, key, value) != CC_OK) {
                 LOG_F("failed to add branch [%s]", key);
-                return false;
+                return -1;
             }
         }
     }
 
-    return true;
+    return added_unique_branches;
 }
 
 
@@ -202,7 +205,8 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         branches_i++;
     }
 
-    if (!add_coverage_info(driver, branches, branches_i)) {
+    ssize_t new_branches = add_coverage_info(driver, branches, branches_i);
+    if (new_branches == -1) {
         LOG_F("failed to add coverage info");
         return false;
     }
@@ -245,13 +249,26 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
     fclose(input_file);
 
     if (driver->single_mode) {
-        // log to interesting log file
-        uint64_t delta_time = get_delta_millis(&driver->start_time);
+        uint64_t delta_time = get_delta_micro(&driver->start_time);
         char line[PATH_MAX];
+        // log to interesting log file
         snprintf(line, PATH_MAX - 1, "%" PRIu64 " %zu\n",
             delta_time, hashtable_size(driver->coverage_info));
         if (write(driver->interesting_log_fd, line, strlen(line)) == -1) {
             PLOG_F("failed to write to interesting log file");
+            return false;
+        }
+        // log to coverage log file
+        HashTableIter hti;
+        hashtable_iter_init(&hti, driver->coverage_info);
+        TableEntry *entry = NULL;
+        size_t branch_hits = 0;
+        while (hashtable_iter_next(&hti, &entry) != CC_ITER_END)
+            branch_hits += *((uint64_t *) entry->value);
+        snprintf(line, PATH_MAX - 1, "%" PRIu64 " %zu %zu %zu\n",
+            delta_time, hashtable_size(driver->coverage_info), new_branches, branch_hits);
+        if (write(driver->coverage_log_fd, line, strlen(line)) == -1) {
+            PLOG_F("failed to write to coverage log file");
             return false;
         }
     } else {
@@ -399,7 +416,7 @@ use_input(driver_t *driver, const char *input_path, const char *coverage_path)
         return false;
     }
 
-    bool coverage_added = add_coverage_info(driver, cov_info, cov_count);
+    bool coverage_added = add_coverage_info(driver, cov_info, cov_count) != -1;
     free(cov_info);
 
     if (!coverage_added) {
@@ -632,6 +649,9 @@ free_driver(driver_t *driver)
     if (driver->interesting_log_fd != -1)
         close(driver->interesting_log_fd);
 
+    if (driver->coverage_log_fd != -1)
+        close(driver->coverage_log_fd);
+
     if (driver->fuzzer_pid > 0 && kill(driver->fuzzer_pid, SIGKILL) == -1) {
         PLOG_W("failed to kill fuzzer (pid=%d)", driver->fuzzer_pid);
     }
@@ -665,6 +685,7 @@ main(int argc, char const *argv[]) {
     memset(driver, 0, sizeof(driver_t));
     driver->sut_use_stdin = true;
     driver->interesting_log_fd = -1;
+    driver->coverage_log_fd = -1;
 
     int opt;
     while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:F:")) != -1) {
@@ -780,6 +801,15 @@ main(int argc, char const *argv[]) {
             WORK_PATH, driver->fuzzer_id);
         driver->interesting_log_fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0664);
         if (driver->interesting_log_fd == -1) {
+            PLOG_F("failed to open %s", filename);
+            free_driver(driver);
+            return EXIT_FAILURE;
+        }
+
+        snprintf(filename, PATH_MAX - 1, "%s/%s.coverage.log",
+            WORK_PATH, driver->fuzzer_id);
+        driver->coverage_log_fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0664);
+        if (driver->coverage_log_fd == -1) {
             PLOG_F("failed to open %s", filename);
             free_driver(driver);
             return EXIT_FAILURE;
