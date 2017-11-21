@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <sys/fcntl.h>
 #include <collectc/hashtable.h>
+#include <collectc/hashset.h>
 #include <libgen.h>
 #include <time.h>
 
@@ -44,6 +45,7 @@ typedef struct driver {
     struct timespec start_time;
     ssize_t interesting_log_fd;
     ssize_t coverage_log_fd;
+    HashSet *interesting_seen;
 } driver_t;
 
 
@@ -362,9 +364,11 @@ inject_into_fuzzer(driver_t *driver, const char *input_path)
         return false;
     }
 
-    char injected_filename[PATH_MAX];
+    char *injected_filename = malloc(PATH_MAX * sizeof(char));
+    assert(injected_filename != NULL);
     snprintf(injected_filename, PATH_MAX - 1, "%s/" INPUT_FMT,
         driver->inject_path, driver->injected_n);
+    injected_filename = realloc(injected_filename, strlen(injected_filename) + 1);
 
     int injected_fd = open(injected_filename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (injected_fd == -1) {
@@ -403,6 +407,11 @@ inject_into_fuzzer(driver_t *driver, const char *input_path)
     close(injected_fd);
 
     driver->injected_n++;
+
+    if (hashset_add(driver->interesting_seen, injected_filename) != CC_OK) {
+        LOG_W("failed to add %s to seen inputs hashset", injected_filename);
+    }
+
     return true;
 }
 
@@ -470,7 +479,7 @@ driver_loop(driver_t *driver)
         // 1. look if fuzzer has a new input -> process it
         uint8_t buf[BUF_SZ];
         int size = inotify_maybe_read(inotify_fd, watch_d, driver->fuzzer_corpus_path,
-                                      buf, BUF_SZ);
+                                      driver->interesting_seen, buf, BUF_SZ);
         if (size == -1) {
             ret = EXIT_FAILURE;
             break;
@@ -645,6 +654,16 @@ free_driver(driver_t *driver)
             free(entry->value);
         }
         hashtable_destroy(driver->coverage_info);
+    }
+
+    if (driver->interesting_seen) {
+        HashSetIter hsi;
+        hashset_iter_init(&hsi, driver->interesting_seen);
+        void *entry = NULL;
+        while (hashset_iter_next(&hsi, &entry) != CC_ITER_END) {
+            free(entry);
+        }
+        hashset_destroy(driver->interesting_seen);
     }
 
     if (driver->interesting_log_fd != -1)
@@ -869,13 +888,18 @@ main(int argc, char const *argv[]) {
         LOG_I("bind metric server on %s", buf);
     }
 
-    if (hashtable_new(&driver->coverage_info) != CC_OK) {
-        LOG_I("failed to create coverage_info");
-        ret = EXIT_FAILURE;
+    if (hashset_new(&driver->interesting_seen) == CC_OK) {
+        if (hashtable_new(&driver->coverage_info) != CC_OK) {
+            LOG_I("failed to create coverage_info");
+            ret = EXIT_FAILURE;
+        } else {
+            signal(SIGINT, sig_handler);
+            signal(SIGKILL, sig_handler);
+            ret = driver_loop(driver);
+        }
     } else {
-        signal(SIGINT, sig_handler);
-        signal(SIGKILL, sig_handler);
-        ret = driver_loop(driver);
+        LOG_E("failed to create interesting_seen");
+        ret = EXIT_FAILURE;
     }
 
     free_driver(driver);

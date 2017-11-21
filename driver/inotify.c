@@ -100,7 +100,7 @@ int inotify_setup(const char *path, const bool *keep_running, int *watch_d)
 
 
 int inotify_maybe_read(int inotify_fd, int wd, const char *path,
-                       uint8_t *buf, size_t buf_len)
+                       HashSet *seen, uint8_t *buf, size_t buf_len)
 {
     struct inotify_event *in_event = inotify_event_new();
     ssize_t ret = read(inotify_fd, in_event, IN_EVENT_SIZE);
@@ -127,19 +127,38 @@ int inotify_maybe_read(int inotify_fd, int wd, const char *path,
         free(in_event);
         return 0;
     }
-    char file_path[PATH_MAX];
-    snprintf(file_path, PATH_MAX, "%s/%s", path, in_event->name);
+
+    char *file_path = malloc(PATH_MAX * sizeof(char));
+    snprintf(file_path, PATH_MAX - 1, "%s/%s", path, in_event->name);
+    file_path = realloc(file_path, strlen(file_path) + 1);
     free(in_event);
+
+    if (seen != NULL) {
+        if (hashset_contains(seen, file_path)) {
+            return 0;
+        }
+
+        if (hashset_add(seen, file_path) != CC_OK) {
+            LOG_W("failed to add %s to seen hashset", file_path);
+            return -1;
+        }
+    }
 
     int fd = open(file_path, O_RDONLY);
     if (fd == -1) {
         PLOG_F("failed to open %s", file_path);
         return -1;
     }
+
     ret = read(fd, buf, buf_len);
     if (ret == -1) {
         PLOG_F("failed reading from %s", file_path);
     }
+
     close(fd);
+
+    if (seen == NULL)
+        free(file_path);
+
     return ret;
 }
