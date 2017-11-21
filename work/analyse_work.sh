@@ -4,10 +4,11 @@ set -e
 
 nfuzzers=$1
 work_path=$2
+ticks=$3
 timestep=60000
 
-if [[ ( "$nfuzzers" = "" ) || ( "${work_path}" = "" )  ]]; then
-  echo "usage: $0 nfuzzers work_path [timestep]"
+if [[ ( "$nfuzzers" = "" ) || ( "${work_path}" = "" ) || ("$ticks" = "")  ]]; then
+  echo "usage: $0 nfuzzers work_path ticks [timestep]"
   exit 1
 fi
 
@@ -16,8 +17,8 @@ if [[ ! -d "${work_path}" ]]; then
   exit 1
 fi
 
-if [[ "$3" != "" ]]; then
-  timestep=$3
+if [[ "$4" != "" ]]; then
+  timestep=$4
 fi
 
 
@@ -37,5 +38,12 @@ sed "s,./work,${work_path},g" $inputs > $inputs_tmp
 ../master/target/debug/inputs -t $timestep -f $inputs_tmp -c $coverage -i $interesting
 rm $inputs_tmp
 
-gnuplot -p -c $plot $coverage $nfuzzers
-gnuplot -p -c $plot $interesting $nfuzzers
+gnuplot -p -c $plot $coverage $(($nfuzzers + 1)) $ticks
+gnuplot -p -c $plot $interesting $(($nfuzzers + 1)) $ticks
+
+winning="${work_path}/winning.log"
+accepted="${work_path}/accepted.log"
+
+../master/target/debug/winning -t $timestep -f $winning -a $accepted
+
+gnuplot -p -c $plot $accepted $nfuzzers $ticks

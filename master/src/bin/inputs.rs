@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::iter::repeat;
 use std::mem;
 use std::path::Path;
 use std::slice;
@@ -15,11 +16,11 @@ extern crate getopts;
 use getopts::Options;
 
 #[path="../common.rs"]
+mod common_m;
+use common_m::{LOG_LINE_SEPARATOR, WORK_PATH};
+
 mod common;
-use common::{LOG_LINE_SEPARATOR, WORK_PATH};
-
-
-static SEPARATOR: &'static str = " ";
+use common::{find_fuzzer_ids, SEPARATOR};
 
 
 #[repr(C)]
@@ -50,34 +51,6 @@ fn parse_line(line: &String) -> Result<(u64, &str, &str, &str), String> {
 }
 
 
-fn find_fuzzer_ids(file: &File) -> Result<Vec<String>, String> {
-    let mut reader = BufReader::new(file);
-
-    reader.seek(SeekFrom::Start(0)).map_err(|e| {
-        format!("failed to seek to start: {}", e)
-    })?;
-
-    let mut fuzzer_ids = vec![];
-    for line_result in BufReader::new(file).lines() {
-        let line = line_result.map_err(|e| {
-            format!("failed reading from file: {}", e)
-        })?;
-
-        let (_, fuzzer_id, _, _) = parse_line(&line)?;
-        let fuzzer_id_string = fuzzer_id.to_string();
-        if !fuzzer_ids.contains(&fuzzer_id_string) {
-            fuzzer_ids.push(fuzzer_id_string);
-        }
-    }
-
-    reader.seek(SeekFrom::Start(0)).map_err(|e| {
-        format!("failed to seek to start: {}", e)
-    })?;
-
-    Ok(fuzzer_ids)
-}
-
-
 fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
                    time_unit: Option<u64>) -> Result<(), String>
                    where P: AsRef<Path>
@@ -87,8 +60,10 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
         format!("failed to open {}: {}", filename.to_string_lossy(), e)
     })?;
 
-    let fuzzer_ids = find_fuzzer_ids(&file)?;
-    let header_str = format!("unit{sep}time{sep}", sep=SEPARATOR) + &fuzzer_ids.join(SEPARATOR) + "\n";
+    let fuzzer_ids = find_fuzzer_ids(&file, &|line| Ok(parse_line(line)?.1))?;
+
+    let header_str = format!("unit{sep}time{sep}{}{sep}global\n",
+        fuzzer_ids.join(SEPARATOR), sep=SEPARATOR);
 
     let coverage_filename = coverage_filename.as_ref();
     let mut coverage_file = File::create(coverage_filename).map_err(|e| {
@@ -111,12 +86,27 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
         coverage.insert(fuzzer_id.clone(), HashMap::new());
     }
 
+    let mut global_coverage: BranchCounts = HashMap::new();
+
     let mut interesting: HashMap<String, usize> = HashMap::new();
     for fuzzer_id in &fuzzer_ids {
         interesting.insert(fuzzer_id.clone(), 0);
     }
 
+    let mut global_interesting = 0usize;
+
     let mut last_time = 0u64;
+
+    {
+        let zeros = repeat("0").take(fuzzer_ids.len() + 1).collect::<Vec<_>>().join(SEPARATOR);
+        let s = format!("0{sep}0{sep}{}", zeros, sep=SEPARATOR);
+        coverage_file.write_all(s.as_bytes()).map_err(|e| {
+            format!("failed to write to {}: {}", coverage_filename.to_string_lossy(), e)
+        })?;
+        interesting_file.write_all(s.as_bytes()).map_err(|e| {
+            format!("failed to write to {}: {}", interesting_filename.to_string_lossy(), e)
+        })?;
+    }
 
     for line_result in BufReader::new(file).lines() {
         let line = line_result.map_err(|e| {
@@ -133,6 +123,7 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
             let mut fuzz_coverage = coverage.get_mut(fuzzer_id).unwrap();
             for branch in &branches {
                 fuzz_coverage.entry(*branch).or_insert(0).add(1);
+                global_coverage.entry(*branch).or_insert(0).add(1);
             }
         }
 
@@ -140,6 +131,8 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
             let mut fuzz_interesting = interesting.get_mut(fuzzer_id).unwrap();
             *fuzz_interesting += 1;
         }
+
+        global_interesting += 1;
 
         // log according to time_unit
         if time_unit.is_none() || time_millis - last_time > time_unit.unwrap() {
@@ -149,7 +142,8 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
 
             let coverage_str = time_str.clone()
                 + &fuzzer_ids.iter().map(|f| format!("{}", coverage.get(f).unwrap().len()))
-                    .collect::<Vec<_>>().join(SEPARATOR) + "\n";
+                    .collect::<Vec<_>>().join(SEPARATOR)
+                + SEPARATOR + &global_coverage.len().to_string() + "\n";
 
             coverage_file.write_all(coverage_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", coverage_filename.to_string_lossy(), e)
@@ -157,7 +151,8 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
 
             let interesting_str = time_str.clone()
                 + &fuzzer_ids.iter().map(|f| format!("{}", interesting.get(f).unwrap()))
-                    .collect::<Vec<_>>().join(SEPARATOR) + "\n";
+                    .collect::<Vec<_>>().join(SEPARATOR)
+                + SEPARATOR + &global_interesting.to_string() + "\n";
 
             interesting_file.write_all(interesting_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", interesting_filename.to_string_lossy(), e)
