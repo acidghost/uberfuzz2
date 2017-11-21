@@ -13,4 +13,5 @@ fuzzers=system("head -n1 ".filename." | cut -d' ' -f".start."-".end)
 set title system("basename ".filename)
 set yrange [* < 0:10 < *]
 set xrange [0:xmax]
+set key on outside left top horizontal center
 plot for [i=1:nfuzzers] filename u "unit":word(fuzzers, i) t word(fuzzers, i) w lp
