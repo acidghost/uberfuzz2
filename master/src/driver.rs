@@ -23,7 +23,7 @@ impl FuzzerType {
         match self {
             &FuzzerType::AFL => "out/inject/queue",
             &FuzzerType::Honggfuzz => "out/inject",
-            &FuzzerType::VUzzer => "out"
+            &FuzzerType::VUzzer => "special"
         }
     }
 }
@@ -90,7 +90,7 @@ impl Driver {
         let corpus_path = match fuzzer_type {
             FuzzerType::AFL => format!("out/{}/queue", fuzzer_id),
             FuzzerType::Honggfuzz => "in".to_string(),
-            FuzzerType::VUzzer => "out".to_string()
+            FuzzerType::VUzzer => "special".to_string()
         };
 
         let inject_path = fuzzer_type.get_inject_path();

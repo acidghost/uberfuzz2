@@ -19,8 +19,30 @@ for conf_file in $conf_files; do
   rm -rf $folder ".${folder}.input" ".${folder}"*
   mkdir $folder
   pushd $folder > /dev/null
-    rm -rf out in driver *.log
-    mkdir -p out/inject/queue out/${folder} driver
+    rm -rf in driver *.log
+
+    case $ftype in
+      afl|hongg)
+        rm -rf out
+        if [[ $ftype = afl ]]; then
+          inject_dir="out/inject/queue"
+        else
+          inject_dir="out/inject"
+        fi
+        mkdir -p $inject_dir out/${folder}
+        ;;
+      vu)
+        rm -rf special inter keep imageOffset.txt
+        mkdir -p special
+        echo A > image.offset
+        ;;
+      *)
+        echo "Unrecognized fuzzer type for $conf_file: $ftype"
+        popd > /dev/null
+        exit 1
+    esac
+    mkdir driver
+
     if [[ $seed_folder -eq 1 ]]; then
       cp -r $seed "in"
     else
