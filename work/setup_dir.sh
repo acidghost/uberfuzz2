@@ -32,7 +32,7 @@ for conf_file in $conf_files; do
         mkdir -p $inject_dir out/${folder}
         ;;
       vu)
-        rm -rf special inter keep imageOffset.txt
+        rm -rf special data inter keep imageOffset.txt
         mkdir -p special
         echo A > image.offset
         ;;
