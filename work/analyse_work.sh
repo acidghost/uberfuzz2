@@ -43,7 +43,9 @@ gnuplot -p -c $plot $interesting $(($nfuzzers + 1)) $ticks
 
 winning="${work_path}/winning.log"
 accepted="${work_path}/accepted.log"
+won="${work_path}/won.log"
 
-../master/target/debug/winning -t $timestep -f $winning -a $accepted
+../master/target/debug/winning -t $timestep -f $winning -a $accepted -w $won
 
 gnuplot -p -c $plot $accepted $nfuzzers $ticks
+gnuplot -p -c $plot $won $nfuzzers $ticks

@@ -37,7 +37,7 @@ fn parse_line(line: &String) -> Result<(u64, &str, Vec<&str>), String> {
 }
 
 
-fn process_file<P>(filename: P, accepted_filename: P, time_unit: Option<u64>)
+fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit: Option<u64>)
     -> Result<(), String>
     where P: AsRef<Path>
 {
@@ -49,17 +49,27 @@ fn process_file<P>(filename: P, accepted_filename: P, time_unit: Option<u64>)
     let fuzzer_ids = find_fuzzer_ids(&file, &|line| parse_line(line).map(|t| t.1))?;
     let header_str = format!("unit{sep}time{sep}", sep=SEPARATOR) + &fuzzer_ids.join(SEPARATOR) + "\n";
 
+    let init_output_file = |filename: &Path| -> Result<File, String> {
+        let mut file = File::create(filename).map_err(|e| {
+            format!("failed to create {}: {}", filename.to_string_lossy(), e)
+        })?;
+        file.write_all(header_str.as_bytes()).map_err(|e| {
+            format!("failed writing header to {}: {}", filename.to_string_lossy(), e)
+        })?;
+        Ok(file)
+    };
+
     let accepted_filename = accepted_filename.as_ref();
-    let mut accepted_file = File::create(accepted_filename).map_err(|e| {
-        format!("failed to create {}: {}", accepted_filename.to_string_lossy(), e)
-    })?;
-    accepted_file.write_all(header_str.as_bytes()).map_err(|e| {
-        format!("failed writing header to {}: {}", accepted_filename.to_string_lossy(), e)
-    })?;
+    let accepted_file = init_output_file(accepted_filename)?;
+
+    let won_filename = won_filename.as_ref();
+    let won_file = init_output_file(won_filename)?;
 
     let mut accepted: HashMap<String, u64> = HashMap::new();
+    let mut won: HashMap<String, u64> = HashMap::new();
     for fuzzer_id in &fuzzer_ids {
         accepted.insert(fuzzer_id.clone(), 0);
+        won.insert(fuzzer_id.clone(), 0);
     }
 
     let mut last_time = 0u64;
@@ -67,9 +77,13 @@ fn process_file<P>(filename: P, accepted_filename: P, time_unit: Option<u64>)
     {
         let zeros = repeat("0").take(fuzzer_ids.len()).collect::<Vec<_>>().join(SEPARATOR);
         let s = format!("0{sep}0{sep}{}", zeros, sep=SEPARATOR);
-        accepted_file.write_all(s.as_bytes()).map_err(|e| {
-            format!("failed to write to {}: {}", accepted_filename.to_string_lossy(), e)
-        })?;
+        let write_zeros = |mut file: &File, filename: &Path| {
+            file.write_all(s.as_bytes()).map_err(|e| {
+                format!("failed to write to {}: {}", filename.to_string_lossy(), e)
+            })
+        };
+        write_zeros(&accepted_file, accepted_filename)?;
+        write_zeros(&won_file, won_filename)?;
     }
 
     for line_result in BufReader::new(file).lines() {
@@ -77,11 +91,18 @@ fn process_file<P>(filename: P, accepted_filename: P, time_unit: Option<u64>)
             format!("failed reading {}: {}", filename.to_string_lossy(), e)
         })?;
 
-        let (time_millis, fuzzer_id, _) = parse_line(&line)?;
+        let (time_millis, fuzzer_id, winning_ids) = parse_line(&line)?;
 
         {   // limit life of accepted borrow
             let mut fuzz_accepted = accepted.get_mut(fuzzer_id).unwrap();
             *fuzz_accepted += 1;
+        }
+
+        for fuzzer_id in &fuzzer_ids {
+            if winning_ids.contains(&fuzzer_id.as_str()) {
+                let mut fuzz_won = won.get_mut(fuzzer_id).unwrap();
+                *fuzz_won += 1;
+            }
         }
 
         // log according to time_unit
@@ -90,13 +111,18 @@ fn process_file<P>(filename: P, accepted_filename: P, time_unit: Option<u64>)
             let time_str = format!("{unit}{sep}{time}{sep}", unit=this_time_unit.unwrap_or(time_millis),
                 sep=SEPARATOR, time=time_millis);
 
-            let accepted_str = time_str.clone()
-                + &fuzzer_ids.iter().map(|f| format!("{}", accepted.get(f).unwrap()))
-                    .collect::<Vec<_>>().join(SEPARATOR) + "\n";
+            let log_line = |hash: &HashMap<String, u64>, mut file: &File, filename: &Path| {
+                let log_str = time_str.clone()
+                    + &fuzzer_ids.iter().map(|f| hash.get(f).unwrap().to_string())
+                        .collect::<Vec<_>>().join(SEPARATOR) + "\n";
 
-            accepted_file.write_all(accepted_str.as_bytes()).map_err(|e| {
-                format!("failed to write to {}: {}", accepted_filename.to_string_lossy(), e)
-            })?;
+                file.write_all(log_str.as_bytes()).map_err(|e| {
+                    format!("failed to write to {}: {}", filename.to_string_lossy(), e)
+                })
+            };
+
+            log_line(&accepted, &accepted_file, accepted_filename)?;
+            log_line(&won, &won_file, won_filename)?;
 
             last_time = time_millis;
         }
@@ -120,11 +146,15 @@ fn main() {
     opts.optopt("t", "time-unit", "The time unit to use to sample data", "1000");
     opts.optopt("a", "accepted", "Where to output the accepted inputs",
         format!("{}/accepted.log", WORK_PATH).as_str());
+    opts.optopt("w", "won", "Where to output won inputs counts",
+        format!("{}/won.log", WORK_PATH).as_str());
 
     let args: Vec<_> = env::args().collect();
     let matches = opts.parse(&args[1..]).map_err(|f| f.to_string()).unwrap();
 
-    if matches.opt_present("h") || !matches.opt_present("f") || !matches.opt_present("a") {
+    if matches.opt_present("h") || !matches.opt_present("f") ||
+        !matches.opt_present("a") || !matches.opt_present("w")
+    {
         println!("{}", opts.usage(&format!("Usage: {} [options]", args[0])));
         return;
     }
@@ -132,8 +162,9 @@ fn main() {
     let time_unit = matches.opt_str("t").map(|s| s.parse().unwrap());
     let filename = matches.opt_str("f").unwrap();
     let accepted_filename = matches.opt_str("a").unwrap();
+    let won_filename = matches.opt_str("w").unwrap();
 
-    if let Err(e) = process_file(&filename, &accepted_filename, time_unit) {
+    if let Err(e) = process_file(&filename, &accepted_filename, &won_filename, time_unit) {
         error!("{}", e);
         exit(1);
     }
