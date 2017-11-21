@@ -253,7 +253,7 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         char line[PATH_MAX];
         // log to interesting log file
         snprintf(line, PATH_MAX - 1, "%" PRIu64 " %zu\n",
-            delta_time, hashtable_size(driver->coverage_info));
+            delta_time, driver->input_n);
         if (write(driver->interesting_log_fd, line, strlen(line)) == -1) {
             PLOG_F("failed to write to interesting log file");
             return false;
@@ -266,7 +266,8 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         while (hashtable_iter_next(&hti, &entry) != CC_ITER_END)
             branch_hits += *((uint64_t *) entry->value);
         snprintf(line, PATH_MAX - 1, "%" PRIu64 " %zu %zu %zu\n",
-            delta_time, hashtable_size(driver->coverage_info), new_branches, branch_hits);
+            delta_time, hashtable_size(driver->coverage_info),
+            new_branches, branch_hits);
         if (write(driver->coverage_log_fd, line, strlen(line)) == -1) {
             PLOG_F("failed to write to coverage log file");
             return false;
@@ -797,7 +798,7 @@ main(int argc, char const *argv[]) {
     if (queues_ports_str == NULL) {
         // open interesting and coverage log file
         char filename[PATH_MAX];
-        snprintf(filename, PATH_MAX - 1, "%s/%s.inputs.log",
+        snprintf(filename, PATH_MAX - 1, "%s/%s.interesting.log",
             WORK_PATH, driver->fuzzer_id);
         driver->interesting_log_fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0664);
         if (driver->interesting_log_fd == -1) {
