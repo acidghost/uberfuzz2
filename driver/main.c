@@ -72,6 +72,10 @@ typedef float (*metric_fn_t)(driver_t *, branch_t *, size_t);
 #define USE_FUZZ_ID_SEP     "_"
 #define WORK_PATH           "./work"        // TODO: make it a cmd line option?
 
+#if !defined(LOG_LEVEL)
+#define LOG_LEVEL           INFO
+#endif
+
 
 bool keep_running = true;
 
@@ -710,7 +714,7 @@ usage(const char *progname)
 
 int
 main(int argc, char const *argv[]) {
-    log_level = INFO;
+    log_level = LOG_LEVEL;
     char *sec_name = NULL;
     char *basic_block_script = NULL;
     char *queues_ports_str = NULL;

@@ -8,7 +8,7 @@ SRCS := $(sort $(wildcard *.c))
 OBJS := $(SRCS:.c=.o)
 
 ifeq ($(DEBUG), 1)
-CFLAGS += -g
+CFLAGS += -g -DLOG_LEVEL=DEBUG
 endif
 
 .PHONY: clean
