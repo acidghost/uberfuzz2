@@ -495,31 +495,59 @@ driver_loop(driver_t *driver)
         }
 
         // 1. look if fuzzer has a new input -> process it
-        uint8_t buf[BUF_SZ];
-        int size = inotify_maybe_read(inotify_fd, watch_d, driver->fuzzer_corpus_path,
-                                      driver->interesting_seen, buf, BUF_SZ);
-        if (size == -1) {
+        char *new_names[IN_NAMES_MAX];
+        size_t new_names_n = 0;
+        bool inotify_res = inotify_maybe_read(
+            inotify_fd, watch_d, driver->fuzzer_corpus_path,
+            driver->interesting_seen, new_names, &new_names_n);
+        if (!inotify_res) {
             ret = EXIT_FAILURE;
             break;
-        } else if (size > 0) {
-            driver->input_n++;
-            // analyse new input and push to `interesting_push`
-            // FIXME: why is the following line required?
-            LOG_I("got input %zu of %zu bytes", driver->input_n, size);
-            if (!process_interesting_input(driver, buf, size)) {
-                LOG_F("failed processing interesting input");
+        } else {
+            // read new files and process them
+            bool early_exit = false;
+            for (size_t i = 0; i < new_names_n; i++) {
+                char *new_name = new_names[i];
+                int fd = open(new_name, O_RDONLY);
+                if (fd == -1) {
+                    PLOG_F("failed to open %s", new_name);
+                    early_exit = true;
+                    break;
+                }
+                uint8_t buf[BUF_SZ];
+                memset(buf, 0, BUF_SZ);
+                ssize_t read_size = read(fd, buf, BUF_SZ);
+                if (read_size == -1) {
+                    PLOG_F("failed reading from %s", new_name);
+                    early_exit = true;
+                    break;
+                }
+                close(fd);
+                // analyse new input and push to `interesting_push`
+                // FIXME: why is the following line required?
+                LOG_I("got input %zu %zu/%zu '%s' of %zu bytes",
+                    driver->input_n, i + 1, new_names_n, new_name, read_size);
+                if (!process_interesting_input(driver, buf, read_size)) {
+                    LOG_F("failed processing interesting input");
+                    early_exit = true;
+                    break;
+                }
+                driver->input_n++;
+            }
+
+            if (early_exit) {
                 ret = EXIT_FAILURE;
                 break;
             }
         }
         usleep(100);
 
-        uint8_t zmq_recv_buf[RECV_BUF_SZ];
-        memset(zmq_recv_buf, 0, RECV_BUF_SZ);
-
         if (!driver->single_mode) {
+            uint8_t zmq_recv_buf[RECV_BUF_SZ];
+            memset(zmq_recv_buf, 0, RECV_BUF_SZ);
+
             // 2. look for metric requests -> reply to request
-            size = zmq_recv(driver->metric_rep, zmq_recv_buf, RECV_BUF_SZ-1, ZMQ_DONTWAIT);
+            int size = zmq_recv(driver->metric_rep, zmq_recv_buf, RECV_BUF_SZ-1, ZMQ_DONTWAIT);
             if (size == -1) {
                 if (errno != EAGAIN && errno != EFSM) {
                     PLOG_F("failed receiving on the metric queue");

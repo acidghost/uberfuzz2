@@ -14,17 +14,20 @@
 #include <errno.h>
 
 #define IN_EVENT_SIZE       (sizeof(struct inotify_event) + NAME_MAX + 1)
+#define IN_EVENT_BUF_SIZE   (IN_EVENT_SIZE * 64)
 
 
-static struct inotify_event *inotify_event_new(void)
+static struct inotify_event *
+inotify_event_new(void)
 {
-    struct inotify_event *in_event = malloc(IN_EVENT_SIZE);
+    struct inotify_event *in_event = malloc(IN_EVENT_BUF_SIZE);
     assert(in_event != NULL);
     return in_event;
 }
 
 
-static int inotify_wait4_creation(int inotify_fd, const char *path, const bool *keep_running)
+static int
+inotify_wait4_creation(int inotify_fd, const char *path, const bool *keep_running)
 {
     char *parent_path = strdup(path);
     char *last_slash = strrchr(parent_path, '/');
@@ -70,7 +73,8 @@ static int inotify_wait4_creation(int inotify_fd, const char *path, const bool *
 }
 
 
-int inotify_setup(const char *path, const bool *keep_running, int *watch_d)
+int
+inotify_setup(const char *path, const bool *keep_running, int *watch_d)
 {
     int inotify_fd = inotify_init1(IN_NONBLOCK);
     if (inotify_fd == -1) {
@@ -99,51 +103,88 @@ int inotify_setup(const char *path, const bool *keep_running, int *watch_d)
 }
 
 
-int inotify_maybe_read(int inotify_fd, int wd, const char *path,
-                       HashSet *seen, uint8_t *buf, size_t buf_len)
+static bool
+inotify_process_event(int wd, const char *path,
+                      const struct inotify_event *in_event, const char **name)
 {
-    struct inotify_event *in_event = inotify_event_new();
-    ssize_t ret = read(inotify_fd, in_event, IN_EVENT_SIZE);
-    if (ret == -1) {
-        free(in_event);
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return 0;
-        return -1;
-    }
-
     if (in_event->wd != wd) {
-        free(in_event);
-        return 0;
+        return true;
     }
 
     if ((in_event->mask & IN_DELETE_SELF) == IN_DELETE_SELF) {
         LOG_E("corpus directory %s deleted", path);
-        free(in_event);
-        return -1;
+        return false;
     }
 
     if (in_event->len == 0) {
         LOG_W("inotify event name len is zero (%" PRIx32 ")", in_event->mask);
-        free(in_event);
-        return 0;
+        return true;
     }
 
-    char *file_path = malloc(PATH_MAX * sizeof(char));
-    snprintf(file_path, PATH_MAX - 1, "%s/%s", path, in_event->name);
-    file_path = realloc(file_path, strlen(file_path) + 1);
-    free(in_event);
+    *name = in_event->name;
+    return true;
+}
 
-    if (seen != NULL) {
-        if (hashset_contains(seen, file_path)) {
-            return 0;
-        }
 
-        if (hashset_add(seen, file_path) != CC_OK) {
-            LOG_W("failed to add %s to seen hashset", file_path);
-            return -1;
-        }
+bool
+inotify_maybe_read(int inotify_fd, int wd, const char *path, HashSet *seen,
+                   char **names, size_t *names_len)
+{
+    struct inotify_event *in_event_mem = inotify_event_new();
+
+    ssize_t ret = read(inotify_fd, in_event_mem, IN_EVENT_BUF_SIZE);
+    if (ret == -1) {
+        free(in_event_mem);
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return true;
+        return false;
     }
 
+    size_t names_i = 0, in_event_i = 0, in_event_offset = 0;
+    while (in_event_offset < ret) {
+        const char *ptr = ((char *) in_event_mem) + in_event_offset;
+        const struct inotify_event *in_event = (struct inotify_event*) ptr;
+        const char *filename = NULL;
+        if (inotify_process_event(wd, path, in_event, &filename) == false) {
+            free(in_event_mem);
+            return false;
+        }
+
+        if (filename != NULL) {
+            if (names_i >= IN_NAMES_MAX) {
+                LOG_W("exceeded IN_NAMES_MAX (%d)", IN_NAMES_MAX);
+                free(in_event_mem);
+                return false;
+            }
+
+            char *file_path = malloc(PATH_MAX * sizeof(char));
+            snprintf(file_path, PATH_MAX - 1, "%s/%s", path, filename);
+            file_path = realloc(file_path, strlen(file_path) + 1);
+
+            if (hashset_contains(seen, file_path)) {
+                free(file_path);
+            } else if (hashset_add(seen, file_path) != CC_OK) {
+                LOG_W("failed to add %s to seen hashset", file_path);
+                free(file_path);
+                free(in_event_mem);
+                return false;
+            } else {
+                names[names_i] = file_path;
+                names_i++;
+            }
+        }
+
+        in_event_i++;
+        in_event_offset += sizeof(struct inotify_event) + in_event->len;
+    }
+
+    LOG_D("got %zu inotify events on %s", in_event_i, path);
+
+    *names_len = names_i;
+    free(in_event_mem);
+    return true;
+
+    /*
     int fd = open(file_path, O_RDONLY);
     if (fd == -1) {
         PLOG_F("failed to open %s", file_path);
@@ -161,4 +202,5 @@ int inotify_maybe_read(int inotify_fd, int wd, const char *path,
         free(file_path);
 
     return ret;
+    */
 }

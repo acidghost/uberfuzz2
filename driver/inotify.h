@@ -7,8 +7,11 @@
 #include <collectc/hashset.h>
 
 
+#define IN_NAMES_MAX            127
+
+
 int inotify_setup(const char *path, const bool *keep_running, int *watch_d);
-int inotify_maybe_read(int inotify_fd, int wd, const char *path,
-                       HashSet *seen, uint8_t *buf, size_t buf_len);
+bool inotify_maybe_read(int inotify_fd, int wd, const char *path,
+                        HashSet *seen, char **names, size_t *names_len);
 
 #endif
