@@ -29,6 +29,7 @@ typedef struct driver {
     const char *sut_input_file;
     bool sut_use_stdin;
     const char *fuzzer_log_filename;
+    const char *fuzzer_log_err_filename;
     const char *fuzzer_corpus_path;
     section_bounds_t *sec_bounds;
     basic_block_t *bbs;
@@ -105,8 +106,21 @@ start_fuzzer(driver_t *driver)
             abort();
         }
 
+        const char *err_filename = driver->fuzzer_log_err_filename == NULL ?
+                                    "/dev/null" : driver->fuzzer_log_err_filename;
+
+        int err_fd = driver->fuzzer_log_err_filename == NULL ?
+                    open(err_filename, O_WRONLY) :
+                    open(err_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+        if (err_fd == -1) {
+            PLOG_F("failed to open %s", err_filename);
+            abort();
+        }
+
         dup2(fd, STDOUT_FILENO);
-        dup2(fd, STDERR_FILENO);
+        dup2(err_fd, STDERR_FILENO);
+
         execv(driver->fuzzer[0], driver->fuzzer);
         PLOG_F("failed to execv fuzzer");
         abort();
@@ -686,8 +700,9 @@ usage(const char *progname)
     printf("usage: %s [options] -- command [args]\n\n"
            "OPTIONS:\n"
            "\t-i fuzzer_id\n\t-f fuzzer_cmd\n\t-b r2bb.sh\n\t-c corpus\n"
-           "\t-d data_path\n\t[-l fuzzer_log]\n\t[-s .section]\n"
-           "\t[-F input_filename]\n"
+           "\t-d data_path\n\t[-l fuzzer_log]\n\t[-L fuzzer_error_log]\n"
+           "\t[-s .section]\n"
+           "\t[-F input_filename]         (if SUT reads from a file)\n"
            "\t[-p i,u,m -j inject_path]   (those are mandatory in multi mode)\n",
            progname);
 }
@@ -708,7 +723,7 @@ main(int argc, char const *argv[]) {
     driver->coverage_log_fd = -1;
 
     int opt;
-    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:j:F:")) != -1) {
+    while ((opt = getopt(argc, (char * const*) argv, "i:f:s:b:c:p:d:l:L:j:F:")) != -1) {
         switch (opt) {
         case 'i':
             driver->fuzzer_id = optarg;
@@ -736,6 +751,9 @@ main(int argc, char const *argv[]) {
             break;
         case 'l':
             driver->fuzzer_log_filename = optarg;
+            break;
+        case 'L':
+            driver->fuzzer_log_err_filename = optarg;
             break;
         case 'j':
             driver->inject_path = optarg;
