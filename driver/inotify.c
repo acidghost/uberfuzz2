@@ -183,24 +183,4 @@ inotify_maybe_read(int inotify_fd, int wd, const char *path, HashSet *seen,
     *names_len = names_i;
     free(in_event_mem);
     return true;
-
-    /*
-    int fd = open(file_path, O_RDONLY);
-    if (fd == -1) {
-        PLOG_F("failed to open %s", file_path);
-        return -1;
-    }
-
-    ret = read(fd, buf, buf_len);
-    if (ret == -1) {
-        PLOG_F("failed reading from %s", file_path);
-    }
-
-    close(fd);
-
-    if (seen == NULL)
-        free(file_path);
-
-    return ret;
-    */
 }
