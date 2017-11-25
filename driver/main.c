@@ -341,15 +341,30 @@ load_coverage_info(const char *cov_filename, branch_t **cov_info)
 static float
 metric_diff(driver_t *driver, branch_t *cov_info, size_t cov_count)
 {
+    HashSet *seen_branches;
+    if (hashset_new(&seen_branches) != CC_OK)
+        return 0;
+
     float score = 0;
     for (size_t i = 0; i < cov_count; i++) {
         branch_t branch = cov_info[i];
         char *key = coverage_info_key(&branch);
         if (!hashtable_contains_key(driver->coverage_info, key)) {
-            score++;
+            if (!hashset_contains(seen_branches, key)) {
+                assert(hashset_add(seen_branches, key) == CC_OK);
+                score++;
+                continue;
+            }
         }
         free(key);
     }
+
+    HashSetIter hsi;
+    hashset_iter_init(&hsi, seen_branches);
+    void *entry;
+    while (hashset_iter_next(&hsi, &entry) != CC_ITER_END)
+        free(entry);
+    hashset_destroy(seen_branches);
 
     return score;
 }
