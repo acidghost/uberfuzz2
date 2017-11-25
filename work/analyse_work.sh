@@ -35,7 +35,7 @@ fi
 # replace './work' in inputs log with `work_path`
 inputs_tmp="${inputs}.tmp"
 sed "s,./work,${work_path},g" $inputs > $inputs_tmp
-../master/target/debug/inputs -t $timestep -f $inputs_tmp -c $coverage -i $interesting
+../master/target/release/inputs -t $timestep -f $inputs_tmp -c $coverage -i $interesting
 rm $inputs_tmp
 
 gnuplot -p -c $plot $coverage $(($nfuzzers + 1)) $ticks
@@ -45,7 +45,7 @@ winning="${work_path}/winning.log"
 accepted="${work_path}/accepted.log"
 won="${work_path}/won.log"
 
-../master/target/debug/winning -t $timestep -f $winning -a $accepted -w $won
+../master/target/release/winning -t $timestep -f $winning -a $accepted -w $won
 
 gnuplot -p -c $plot $accepted $nfuzzers $ticks
 gnuplot -p -c $plot $won $nfuzzers $ticks
