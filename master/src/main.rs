@@ -6,6 +6,7 @@ extern crate nix;
 extern crate getopts;
 extern crate time;
 extern crate rand;
+extern crate inotify;
 
 mod common;
 mod driver;

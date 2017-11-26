@@ -11,7 +11,7 @@ const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 const DRIVER_EXE: &'static str = "./driver/driver";
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FuzzerType {
     AFL,
     Honggfuzz,
@@ -149,7 +149,7 @@ impl Driver {
             .expect(&format!("failed to spawn driver {}", self.fuzzer_id))
     }
 
-    pub fn get_metric_port(&self) -> u32 {
-        self.metric_port
-    }
+    pub fn get_metric_port(&self) -> u32 { self.metric_port }
+
+    pub fn is_vuzzer(&self) -> bool { self.fuzzer_type == FuzzerType::VUzzer }
 }

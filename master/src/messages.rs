@@ -68,7 +68,7 @@ impl ToString for ReqMetric {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RepMetric {
     pub metric: f64
 }
