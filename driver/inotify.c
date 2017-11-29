@@ -14,7 +14,7 @@
 #include <errno.h>
 
 #define IN_EVENT_SIZE       (sizeof(struct inotify_event) + NAME_MAX + 1)
-#define IN_EVENT_BUF_SIZE   (IN_EVENT_SIZE * 64)
+#define IN_EVENT_BUF_SIZE   (IN_EVENT_SIZE * 3)
 
 
 static struct inotify_event *
