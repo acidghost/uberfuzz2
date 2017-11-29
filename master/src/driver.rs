@@ -7,7 +7,6 @@ use master;
 
 
 const DEFAULT_SECTION: &'static str = ".text";
-const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 const DRIVER_EXE: &'static str = "./driver/driver";
 
 
@@ -57,7 +56,7 @@ pub struct Driver {
     fuzzer_type: FuzzerType,
     section_name: String,
     fuzzer_cmd_filename: String,
-    basic_block_script: String,
+    basic_block_script: Option<String>,
     fuzzer_corpus_path: String,
     fuzzer_log_filename: String,
     fuzzer_log_err_filename: String,
@@ -74,17 +73,18 @@ pub struct Driver {
 
 impl Driver {
     pub fn with_defaults(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                         sut_input_file: Option<String>, metric_port: u32, work_path: String)
+                         sut_input_file: Option<String>, metric_port: u32, work_path: String,
+                         basic_block_script: Option<String>)
                          -> Driver
     {
         Driver::new(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, work_path,
-            None, None, None, None)
+            basic_block_script, None, None, None)
     }
 
     pub fn new<OS, OU>(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
                        sut_input_file: Option<String>, metric_port: u32, work_path: String,
-                       interesting_port: OU, use_port: OU, section_name: OS,
-                       basic_block_script: OS) -> Driver
+                       basic_block_script: OS, interesting_port: OU, use_port: OU, section_name: OS)
+                       -> Driver
                        where OS: Into<Option<String>>,
                              OU: Into<Option<u32>>
     {
@@ -101,7 +101,7 @@ impl Driver {
             fuzzer_type: fuzzer_type,
             section_name: section_name.into().unwrap_or(DEFAULT_SECTION.to_string()),
             fuzzer_cmd_filename: format!("{}/{}.{}.conf", work_path, fuzzer_id, fuzzer_type.to_string()),
-            basic_block_script: basic_block_script.into().unwrap_or(DEFAULT_BB_SCRIPT.to_string()),
+            basic_block_script: basic_block_script.into(),
             fuzzer_corpus_path: format!("{}/{}/{}", work_path, fuzzer_id, corpus_path),
             fuzzer_log_filename: format!("{}/{}.fuzz.log", work_path, fuzzer_id),
             fuzzer_log_err_filename: format!("{}/{}.fuzz.err.log", work_path, fuzzer_id),
@@ -125,7 +125,6 @@ impl Driver {
             "-i", &self.fuzzer_id,
             "-s", &self.section_name,
             "-f", &self.fuzzer_cmd_filename,
-            "-b", &self.basic_block_script,
             "-c", &self.fuzzer_corpus_path,
             "-l", &self.fuzzer_log_filename,
             "-L", &self.fuzzer_log_err_filename,
@@ -133,6 +132,10 @@ impl Driver {
             "-d", &self.data_path,
             "-j", &self.inject_path
         ];
+
+        if let Some(ref basic_block_script) = self.basic_block_script {
+            args.extend_from_slice(&["-b", basic_block_script]);
+        }
 
         if let Some(ref sut_input_file) = self.sut_input_file {
             args.extend_from_slice(&["-F", sut_input_file]);

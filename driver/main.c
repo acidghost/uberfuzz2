@@ -746,7 +746,7 @@ usage(const char *progname)
 {
     printf("usage: %s [options] -- command [args]\n\n"
            "OPTIONS:\n"
-           "\t-i fuzzer_id\n\t-f fuzzer_cmd\n\t-b r2bb.sh\n\t-c corpus\n"
+           "\t-i fuzzer_id\n\t-f fuzzer_cmd\n\t[-b r2bb.sh]\n\t-c corpus\n"
            "\t-d data_path\n\t[-l fuzzer_log]\n\t[-L fuzzer_error_log]\n"
            "\t[-s .section]\n"
            "\t[-F input_filename]         (if SUT reads from a file)\n"
@@ -813,8 +813,7 @@ main(int argc, char const *argv[]) {
     }
 
     if (argc == optind || driver->fuzzer_id == NULL ||
-        basic_block_script == NULL || driver->fuzzer_corpus_path == NULL ||
-        driver->data_path == NULL)
+        driver->fuzzer_corpus_path == NULL || driver->data_path == NULL)
     {
         free_driver(driver);
         usage(argv[0]);
@@ -865,15 +864,19 @@ main(int argc, char const *argv[]) {
         LOG_I("all code");
     }
 
-    driver->bbs_n = basic_blocks_find(basic_block_script, driver->sut[0], &driver->bbs);
-    if (driver->bbs_n < 0) {
-        LOG_F("failed reading basic blocks");
-        free_driver(driver);
-        exit(EXIT_FAILURE);
-    }
-    LOG_I("found %zd basic blocks", driver->bbs_n);
-    for (size_t i = 0; i < driver->bbs_n; i++) {
-        LOG_D("BB 0x%08" PRIx64 " 0x%08" PRIx64, driver->bbs[i].from, driver->bbs[i].to);
+    if (basic_block_script == NULL) {
+        LOG_I("running without basic blocks");
+    } else {
+        driver->bbs_n = basic_blocks_find(basic_block_script, driver->sut[0], &driver->bbs);
+        if (driver->bbs_n < 0) {
+            LOG_F("failed reading basic blocks");
+            free_driver(driver);
+            exit(EXIT_FAILURE);
+        }
+        LOG_I("found %zd basic blocks", driver->bbs_n);
+        for (size_t i = 0; i < driver->bbs_n; i++) {
+            LOG_D("BB 0x%08" PRIx64 " 0x%08" PRIx64, driver->bbs[i].from, driver->bbs[i].to);
+        }
     }
 
     int ret = EXIT_SUCCESS;

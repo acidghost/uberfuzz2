@@ -32,6 +32,7 @@ pub const USE_PORT: u32 = INTERESTING_PORT + 1;
 pub const METRIC_PORT_START: u32 = USE_PORT + 1;
 const BIND_ADDR: &'static str = "tcp://*";
 const CONN_ADDR: &'static str = "tcp://localhost";
+const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 
 
 enum WinningStrategy {
@@ -96,6 +97,7 @@ impl Master {
         opts.optflag("H", "high", "High or low winning strategy");
         opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
         opts.optflag("s", "stdin", "Target reads from standard input");
+        opts.optflag("B", "basic-blocks", "Drivers use basic blocks from static analysis");
 
         let matches = opts.parse(&args[1..]).map_err(|f| f.to_string())?;
 
@@ -123,6 +125,10 @@ impl Master {
         }
 
         debug!("found conf files: {:?}", conf_files);
+
+        let bb_script = if matches.opt_present("B") {
+            Some(DEFAULT_BB_SCRIPT.to_string())
+        } else { None };
 
         let mut drivers_map = HashMap::new();
         let mut metric_port = METRIC_PORT_START;
@@ -162,7 +168,8 @@ impl Master {
             }).collect();
 
             drivers_map.insert(fuzzer_id.clone(),
-                Driver::with_defaults(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, wp));
+                Driver::with_defaults(
+                    fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, wp, bb_script.clone()));
 
             metric_port += 1;
         }
