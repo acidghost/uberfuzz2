@@ -12,7 +12,7 @@ if [ "$1" = "start" ]; then
 	echo 1 | sudo tee /proc/sys/kernel/sched_child_runs_first
 	echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
 	echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-	sudo sysctl kernel.perf_event_mlock_kb=3000000
+	sudo sysctl kernel.perf_event_mlock_kb=300000000
 else
 	echo $oldcore | sudo tee /proc/sys/kernel/core_pattern
 	cd /sys/devices/system/cpu; echo $oldscaling | sudo tee cpu*/cpufreq/scaling_governor
