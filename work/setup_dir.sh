@@ -16,8 +16,8 @@ for conf_file in $conf_files; do
   ftype=${arr[1]}
 
   echo "Setting up ${folder} (type ${ftype})"
-  rm -rf $folder ".${folder}.input" ".${folder}"*
-  mkdir $folder
+  rm -rf ".${folder}.input" ".${folder}"*
+  [[ -d $folder ]] || mkdir $folder
   pushd $folder > /dev/null
     rm -rf in driver *.log
 
@@ -32,8 +32,14 @@ for conf_file in $conf_files; do
         mkdir -p $inject_dir out/${folder}
         ;;
       vu)
+        if [[ "`mount -l | grep $folder/special`" != "" ]]; then
+          echo -e "\tUnmounting special..."
+          sudo umount special
+        fi
         rm -rf special data inter keep imageOffset.txt
         mkdir -p special
+        echo -e "\tMounting special..."
+        sudo mount -t tmpfs -o size=1024M tmpfs special
         echo A > image.offset
         ;;
       *)
