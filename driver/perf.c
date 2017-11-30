@@ -96,7 +96,7 @@ static void analyze_bts(bts_branch_t **bts_start, uint64_t *count)
 
     if (bts_start != NULL && count != NULL) {
         *bts_start = br;
-        *count = ((bts_branch_t *)(gbl_status.mmap_aux + aux_head) - br);
+        *count = aux_head / sizeof(bts_branch_t);
         return;
     }
 
