@@ -269,7 +269,7 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
     fclose(input_file);
 
     if (driver->single_mode) {
-        uint64_t delta_time = get_delta_micro(&driver->start_time);
+        uint64_t delta_time = get_delta_micro(&driver->start_time) / 1000;
         char line[PATH_MAX];
         // log to interesting log file
         snprintf(line, PATH_MAX - 1, "%" PRIu64 " %zu\n",
