@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::iter::repeat;
 use std::mem;
 use std::path::Path;
 use std::slice;
@@ -20,7 +19,7 @@ mod common_m;
 use common_m::{LOG_LINE_SEPARATOR, WORK_PATH};
 
 mod common;
-use common::{find_fuzzer_ids, SEPARATOR};
+use common::*;
 
 
 #[repr(C)]
@@ -61,51 +60,36 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
     })?;
 
     let fuzzer_ids = find_fuzzer_ids(&file, &|line| Ok(parse_line(line)?.1))?;
-
-    let header_str = format!("unit{sep}time{sep}{}{sep}global\n",
-        fuzzer_ids.join(SEPARATOR), sep=SEPARATOR);
+    let header_str = get_header(&fuzzer_ids);
 
     let coverage_filename = coverage_filename.as_ref();
-    let mut coverage_file = File::create(coverage_filename).map_err(|e| {
-        format!("failed to create {}: {}", coverage_filename.to_string_lossy(), e)
-    })?;
-    coverage_file.write_all(header_str.as_bytes()).map_err(|e| {
-        format!("failed writing header to {}: {}", coverage_filename.to_string_lossy(), e)
-    })?;
+    let mut coverage_file = init_output_file(coverage_filename, &header_str)?;
 
     let interesting_filename = interesting_filename.as_ref();
-    let mut interesting_file = File::create(interesting_filename).map_err(|e| {
-        format!("failed to create {}: {}", interesting_filename.to_string_lossy(), e)
-    })?;
-    interesting_file.write_all(header_str.as_bytes()).map_err(|e| {
-        format!("failed writing header to {}: {}", interesting_filename.to_string_lossy(), e)
-    })?;
+    let mut interesting_file = init_output_file(interesting_filename, &header_str)?;
 
     let mut coverage: HashMap<String, BranchCounts> = HashMap::new();
+    let mut interesting: HashMap<String, usize> = HashMap::new();
     for fuzzer_id in &fuzzer_ids {
         coverage.insert(fuzzer_id.clone(), HashMap::new());
+        interesting.insert(fuzzer_id.clone(), 0);
     }
 
     let mut global_coverage: BranchCounts = HashMap::new();
-
-    let mut interesting: HashMap<String, usize> = HashMap::new();
-    for fuzzer_id in &fuzzer_ids {
-        interesting.insert(fuzzer_id.clone(), 0);
-    }
 
     let mut global_interesting = 0usize;
 
     let mut last_time = 0u64;
 
     {
-        let zeros = repeat("0").take(fuzzer_ids.len() + 1).collect::<Vec<_>>().join(SEPARATOR);
-        let s = format!("0{sep}0{sep}{}\n", zeros, sep=SEPARATOR);
-        coverage_file.write_all(s.as_bytes()).map_err(|e| {
-            format!("failed to write to {}: {}", coverage_filename.to_string_lossy(), e)
-        })?;
-        interesting_file.write_all(s.as_bytes()).map_err(|e| {
-            format!("failed to write to {}: {}", interesting_filename.to_string_lossy(), e)
-        })?;
+        let zeros_str = get_zeros(fuzzer_ids.len());
+        let write_zeros = |mut file: &File, filename: &Path| {
+            file.write_all(zeros_str.as_bytes()).map_err(|e| {
+                format!("failed to write to {}: {}", filename.to_string_lossy(), e)
+            })
+        };
+        write_zeros(&coverage_file, coverage_filename)?;
+        write_zeros(&interesting_file, interesting_filename)?;
     }
 
     for line_result in BufReader::new(file).lines() {
@@ -137,8 +121,7 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
         // log according to time_unit
         if time_unit.is_none() || time_millis - last_time > time_unit.unwrap() {
             let this_time_unit = time_unit.map(|t| time_millis / t);
-            let time_str = format!("{unit}{sep}{time}{sep}", unit=this_time_unit.unwrap_or(time_millis),
-                sep=SEPARATOR, time=time_millis);
+            let time_str = get_time_part(this_time_unit, time_millis);
 
             let coverage_str = time_str.clone()
                 + &fuzzer_ids.iter().map(|f| format!("{}", coverage.get(f).unwrap().len()))

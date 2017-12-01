@@ -1,5 +1,7 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::iter::repeat;
+use std::path::Path;
 
 
 pub const SEPARATOR: &str = " ";
@@ -32,4 +34,28 @@ pub fn find_fuzzer_ids(file: &File, get_id: &Fn(&String) -> Result<&str, String>
     })?;
 
     Ok(fuzzer_ids)
+}
+
+pub fn get_header(fuzzer_ids: &[String]) -> String {
+    format!("unit{sep}time{sep}", sep=SEPARATOR) + &fuzzer_ids.join(SEPARATOR) + "\n"
+}
+
+pub fn init_output_file(filename: &Path, header_str: &str) -> Result<File, String> {
+    let mut file = File::create(filename).map_err(|e| {
+        format!("failed to create {}: {}", filename.to_string_lossy(), e)
+    })?;
+    file.write_all(header_str.as_bytes()).map_err(|e| {
+        format!("failed writing header to {}: {}", filename.to_string_lossy(), e)
+    })?;
+    Ok(file)
+}
+
+pub fn get_zeros(n: usize) -> String {
+    let zeros = repeat("0").take(n).collect::<Vec<_>>().join(SEPARATOR);
+    format!("0{sep}0{sep}{}\n", zeros, sep=SEPARATOR)
+}
+
+pub fn get_time_part(this_time_unit: Option<u64>, time_millis: u64) -> String {
+    format!("{unit}{sep}{time}{sep}",
+        unit=this_time_unit.unwrap_or(time_millis), sep=SEPARATOR, time=time_millis)
 }

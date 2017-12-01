@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::iter::repeat;
 use std::path::Path;
 use std::process::exit;
 
@@ -17,7 +16,7 @@ mod common_m;
 use common_m::{LOG_LINE_SEPARATOR, WORK_PATH};
 
 mod common;
-use common::{find_fuzzer_ids, SEPARATOR};
+use common::*;
 
 
 // format is time,fuzzer_ids,winning
@@ -37,6 +36,20 @@ fn parse_line(line: &String) -> Result<(u64, &str, Vec<&str>), String> {
 }
 
 
+fn log_line(time_str: &str, fuzzer_ids: &[String], hash: &HashMap<String, u64>,
+            mut file: &File, filename: &Path)
+    -> Result<(), String>
+{
+    let log_str = time_str.to_string()
+        + &fuzzer_ids.iter().map(|f| hash.get(f).unwrap().to_string())
+            .collect::<Vec<_>>().join(SEPARATOR) + "\n";
+
+    file.write_all(log_str.as_bytes()).map_err(|e| {
+        format!("failed to write to {}: {}", filename.to_string_lossy(), e)
+    })
+}
+
+
 fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit: Option<u64>)
     -> Result<(), String>
     where P: AsRef<Path>
@@ -47,23 +60,13 @@ fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit
     })?;
 
     let fuzzer_ids = find_fuzzer_ids(&file, &|line| parse_line(line).map(|t| t.1))?;
-    let header_str = format!("unit{sep}time{sep}", sep=SEPARATOR) + &fuzzer_ids.join(SEPARATOR) + "\n";
-
-    let init_output_file = |filename: &Path| -> Result<File, String> {
-        let mut file = File::create(filename).map_err(|e| {
-            format!("failed to create {}: {}", filename.to_string_lossy(), e)
-        })?;
-        file.write_all(header_str.as_bytes()).map_err(|e| {
-            format!("failed writing header to {}: {}", filename.to_string_lossy(), e)
-        })?;
-        Ok(file)
-    };
+    let header_str = get_header(&fuzzer_ids);
 
     let accepted_filename = accepted_filename.as_ref();
-    let accepted_file = init_output_file(accepted_filename)?;
+    let accepted_file = init_output_file(accepted_filename, &header_str)?;
 
     let won_filename = won_filename.as_ref();
-    let won_file = init_output_file(won_filename)?;
+    let won_file = init_output_file(won_filename, &header_str)?;
 
     let mut accepted: HashMap<String, u64> = HashMap::new();
     let mut won: HashMap<String, u64> = HashMap::new();
@@ -75,10 +78,9 @@ fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit
     let mut last_time = 0u64;
 
     {
-        let zeros = repeat("0").take(fuzzer_ids.len()).collect::<Vec<_>>().join(SEPARATOR);
-        let s = format!("0{sep}0{sep}{}\n", zeros, sep=SEPARATOR);
+        let zeros_str = get_zeros(fuzzer_ids.len());
         let write_zeros = |mut file: &File, filename: &Path| {
-            file.write_all(s.as_bytes()).map_err(|e| {
+            file.write_all(zeros_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", filename.to_string_lossy(), e)
             })
         };
@@ -108,21 +110,10 @@ fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit
         // log according to time_unit
         if time_unit.is_none() || time_millis - last_time > time_unit.unwrap() {
             let this_time_unit = time_unit.map(|t| time_millis / t);
-            let time_str = format!("{unit}{sep}{time}{sep}", unit=this_time_unit.unwrap_or(time_millis),
-                sep=SEPARATOR, time=time_millis);
+            let time_str = get_time_part(this_time_unit, time_millis);
 
-            let log_line = |hash: &HashMap<String, u64>, mut file: &File, filename: &Path| {
-                let log_str = time_str.clone()
-                    + &fuzzer_ids.iter().map(|f| hash.get(f).unwrap().to_string())
-                        .collect::<Vec<_>>().join(SEPARATOR) + "\n";
-
-                file.write_all(log_str.as_bytes()).map_err(|e| {
-                    format!("failed to write to {}: {}", filename.to_string_lossy(), e)
-                })
-            };
-
-            log_line(&accepted, &accepted_file, accepted_filename)?;
-            log_line(&won, &won_file, won_filename)?;
+            log_line(&time_str, &fuzzer_ids, &accepted, &accepted_file, accepted_filename)?;
+            log_line(&time_str, &fuzzer_ids, &won, &won_file, won_filename)?;
 
             last_time = time_millis;
         }
