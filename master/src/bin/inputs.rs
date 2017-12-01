@@ -60,7 +60,8 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
     })?;
 
     let fuzzer_ids = find_fuzzer_ids(&file, &|line| Ok(parse_line(line)?.1))?;
-    let header_str = get_header(&fuzzer_ids);
+    let header_str = format!("unit{sep}time{sep}{}{sep}global\n",
+        fuzzer_ids.join(SEPARATOR), sep=SEPARATOR);
 
     let coverage_filename = coverage_filename.as_ref();
     let mut coverage_file = init_output_file(coverage_filename, &header_str)?;
@@ -82,7 +83,7 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
     let mut last_time = 0u64;
 
     {
-        let zeros_str = get_zeros(fuzzer_ids.len());
+        let zeros_str = get_zeros(fuzzer_ids.len() + 1);
         let write_zeros = |mut file: &File, filename: &Path| {
             file.write_all(zeros_str.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", filename.to_string_lossy(), e)

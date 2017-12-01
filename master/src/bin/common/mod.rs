@@ -36,10 +36,6 @@ pub fn find_fuzzer_ids(file: &File, get_id: &Fn(&String) -> Result<&str, String>
     Ok(fuzzer_ids)
 }
 
-pub fn get_header(fuzzer_ids: &[String]) -> String {
-    format!("unit{sep}time{sep}", sep=SEPARATOR) + &fuzzer_ids.join(SEPARATOR) + "\n"
-}
-
 pub fn init_output_file(filename: &Path, header_str: &str) -> Result<File, String> {
     let mut file = File::create(filename).map_err(|e| {
         format!("failed to create {}: {}", filename.to_string_lossy(), e)

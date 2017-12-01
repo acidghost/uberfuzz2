@@ -60,7 +60,7 @@ fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit
     })?;
 
     let fuzzer_ids = find_fuzzer_ids(&file, &|line| parse_line(line).map(|t| t.1))?;
-    let header_str = get_header(&fuzzer_ids);
+    let header_str = format!("unit{sep}time{sep}{}\n", fuzzer_ids.join(SEPARATOR), sep=SEPARATOR);
 
     let accepted_filename = accepted_filename.as_ref();
     let accepted_file = init_output_file(accepted_filename, &header_str)?;
