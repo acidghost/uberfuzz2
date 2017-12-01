@@ -9,12 +9,12 @@ function uber_init_env {
   export PIN_ROOT=/media/SB-1TB/workarea/uni/master/thesis/pin-2.13-62732-gcc.4.4.7-linux
   export RUST_LOG=DEBUG
 
-	echo core | sudo tee /proc/sys/kernel/core_pattern
-	echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-	echo 1 | sudo tee /proc/sys/kernel/sched_child_runs_first
-	echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
-	echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-	sudo sysctl kernel.perf_event_mlock_kb=300000000
+  echo core | sudo tee /proc/sys/kernel/core_pattern
+  echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+  echo 1 | sudo tee /proc/sys/kernel/sched_child_runs_first
+  echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+  echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+  sudo sysctl kernel.perf_event_mlock_kb=300000000
 }
 
 function uber_restore_env {
@@ -22,16 +22,16 @@ function uber_restore_env {
   unset PIN_ROOT
   unset RUST_LOG
 
-	echo "|/usr/share/apport/apport %p %s %c %P" | sudo tee /proc/sys/kernel/core_pattern
-	echo powersave | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-	echo 0 | sudo tee /proc/sys/kernel/sched_child_runs_first
-	echo 1 | sudo tee /proc/sys/kernel/randomize_va_space
-	echo 1 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-	sudo sysctl kernel.perf_event_mlock_kb=30000
+  echo "|/usr/share/apport/apport %p %s %c %P" | sudo tee /proc/sys/kernel/core_pattern
+  echo powersave | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+  echo 0 | sudo tee /proc/sys/kernel/sched_child_runs_first
+  echo 1 | sudo tee /proc/sys/kernel/randomize_va_space
+  echo 1 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+  sudo sysctl kernel.perf_event_mlock_kb=30000
 }
 
 if [[ "$1" = "start" ]]; then
-	uber_init_env
+  uber_init_env
 else
   uber_restore_env
 fi

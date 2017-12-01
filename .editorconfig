@@ -14,6 +14,10 @@ indent_size = 4
 indent_style = space
 indent_size = 4
 
+[*.sh]
+indent_style = space
+indent_size = 2
+
 [*.md]
 # Preserve trailing whitespace for Markdown files
 trim_trailing_whitespace = false
