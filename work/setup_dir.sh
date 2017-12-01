@@ -8,15 +8,19 @@ fi
 
 conf_files="`ls *.conf`"
 
-rm -rf ./*.log ./.input
+rm -rf accepted.log coverage.log inputs.log interesting.log winning.log won.log
 
 for conf_file in $conf_files; do
   arr=(${conf_file//./ })
   folder=${arr[0]}
   ftype=${arr[1]}
 
+  if [[ "$2" != "" && "$folder" != "$2" ]]; then
+    continue
+  fi
+
   echo "Setting up ${folder} (type ${ftype})"
-  rm -rf ".${folder}.input" ".${folder}"*
+  rm -rf ".${folder}.input" ".${folder}"* $folder*.log
   [[ -d $folder ]] || mkdir $folder
   pushd $folder > /dev/null
     rm -rf in driver *.log
