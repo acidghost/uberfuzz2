@@ -76,7 +76,7 @@ fn process_file<P>(filename: P, accepted_filename: P, won_filename: P, time_unit
 
     {
         let zeros = repeat("0").take(fuzzer_ids.len()).collect::<Vec<_>>().join(SEPARATOR);
-        let s = format!("0{sep}0{sep}{}", zeros, sep=SEPARATOR);
+        let s = format!("0{sep}0{sep}{}\n", zeros, sep=SEPARATOR);
         let write_zeros = |mut file: &File, filename: &Path| {
             file.write_all(s.as_bytes()).map_err(|e| {
                 format!("failed to write to {}: {}", filename.to_string_lossy(), e)

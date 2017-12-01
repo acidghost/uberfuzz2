@@ -99,7 +99,7 @@ fn process_file<P>(filename: P, coverage_filename: P, interesting_filename: P,
 
     {
         let zeros = repeat("0").take(fuzzer_ids.len() + 1).collect::<Vec<_>>().join(SEPARATOR);
-        let s = format!("0{sep}0{sep}{}", zeros, sep=SEPARATOR);
+        let s = format!("0{sep}0{sep}{}\n", zeros, sep=SEPARATOR);
         coverage_file.write_all(s.as_bytes()).map_err(|e| {
             format!("failed to write to {}: {}", coverage_filename.to_string_lossy(), e)
         })?;
