@@ -71,4 +71,9 @@ timeout -k 3 $((60 * 60 * 4)) ./driver/driver -i fairfuzz -f ./work/fairfuzz.afl
   -c ./work/fairfuzz/out/fairfuzz/queue -d ./work/fairfuzz/driver \
   -l ./work/fairfuzz.fuzz.log -L ./work/fairfuzz.fuzz.err.log \
   -- ../libjpeg-turbo-1.5.1/djpeg ./work/.fairfuzz.input
+
+timeout -k 3 $((60 * 60 * 4)) ./driver/driver -i aflfast -f ./work/aflfast.afl.conf \
+  -c ./work/aflfast/out/aflfast/queue -d ./work/aflfast/driver \
+  -l ./work/aflfast.fuzz.log -L ./work/aflfast.fuzz.err.log \
+  -- ../libjpeg-turbo-1.5.1/djpeg ./work/.aflfast.input
 ```
