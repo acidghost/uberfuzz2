@@ -225,6 +225,8 @@ process_interesting_input(driver_t *driver, uint8_t *buf, size_t size)
         branches_i++;
     }
 
+    perf_close();
+
     ssize_t new_branches = add_coverage_info(driver, branches, branches_i);
     if (new_branches == -1) {
         LOG_F("failed to add coverage info");
