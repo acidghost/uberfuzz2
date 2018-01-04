@@ -19,10 +19,13 @@
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 
 #define PERF_MAP_SZ ((1024 * 512) + getpagesize())
 #define PERF_AUX_SZ (1024 * 1024)
+
+#define CHILD_TIMEOUT_MICRO 60000000            // 1 minute
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -127,6 +130,15 @@ perf_sig_handler(int signum, siginfo_t *siginfo, void *dummy)
 }
 
 
+static uint64_t
+get_delta_micro(struct timespec *start)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+    return (now.tv_sec - start->tv_sec) * 1000000 + (now.tv_nsec - start->tv_nsec) / 1000;
+}
+
+
 static int32_t
 perf_parent(bts_branch_t **bts_start, uint64_t *count)
 {
@@ -173,11 +185,32 @@ perf_parent(bts_branch_t **bts_start, uint64_t *count)
     fcntl(gbl_status.perf_fd, F_SETOWN, getpid());
     ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_ENABLE, 0);
 
+    struct timespec start_time;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
+
     int status;
     int wait_ret;
     while (1) {
         LOG_D("waiting for child PID=%lu", gbl_status.child_pid);
-        wait_ret = waitpid(gbl_status.child_pid, &status, 0);
+        wait_ret = waitpid(gbl_status.child_pid, &status, WNOHANG);
+        if (wait_ret == 0) {
+            uint64_t delta_time = get_delta_micro(&start_time);
+            if (delta_time > CHILD_TIMEOUT_MICRO) {
+                if (kill(gbl_status.child_pid, SIGKILL) == -1) {
+                    PLOG_F("failed to kill child PID=%lu after %" PRIu64 " millis",
+                        gbl_status.child_pid, delta_time);
+                    goto bail_perf_wait;
+                }
+                if (waitpid(gbl_status.child_pid, NULL, 0) == -1) {
+                    PLOG_F("failed waiting dieing child PID=%lu",
+                        gbl_status.child_pid);
+                    goto bail_perf_wait;
+                }
+                break;
+            }
+            usleep(50);
+            continue;
+        }
         if (wait_ret == -1 && errno == EINTR) {
             continue;
         }
