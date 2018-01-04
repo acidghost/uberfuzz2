@@ -15,3 +15,7 @@ set yrange [* < 0:10 < *]
 set xrange [0:xmax]
 set key on outside left top horizontal center
 plot for [i=1:nfuzzers] filename u "unit":word(fuzzers, i) t word(fuzzers, i) w l
+
+set terminal png size 1024,768
+set output filename.".png"
+replot

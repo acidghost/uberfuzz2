@@ -24,4 +24,4 @@ for conf_file in $conf_files; do
   mv $folder "${where}/"
   mv $folder*.log "${where}/"
 done
-mv *.log "${where}/"
+mv *.log *.png "${where}/"

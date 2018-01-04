@@ -8,7 +8,8 @@ fi
 
 conf_files="`ls *.conf`"
 
-rm -rf accepted.log coverage.log inputs.log interesting.log winning.log won.log
+rm -rf accepted.log coverage.log inputs.log interesting.log winning.log won.log \
+  *.png
 
 for conf_file in $conf_files; do
   arr=(${conf_file//./ })
