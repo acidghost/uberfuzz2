@@ -37,14 +37,14 @@ for conf_file in $conf_files; do
         mkdir -p $inject_dir out/${folder}
         ;;
       vu)
-        if [[ "`mount -l | grep $folder/special`" != "" ]]; then
-          echo -e "\tUnmounting special..."
-          sudo umount special
-        fi
+        # if [[ "`mount -l | grep $folder/special`" != "" ]]; then
+        #   echo -e "\tUnmounting special..."
+        #   sudo umount special
+        # fi
         rm -rf special data inter keep imageOffset.txt
         mkdir -p special
-        echo -e "\tMounting special..."
-        sudo mount -t tmpfs -o size=1024M tmpfs special
+        # echo -e "\tMounting special..."
+        # sudo mount -t tmpfs -o size=1024M tmpfs special
         echo A > image.offset
         ;;
       *)

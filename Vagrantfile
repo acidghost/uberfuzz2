@@ -66,50 +66,33 @@ Vagrant.configure("2") do |config|
   # Enable provisioning with a shell script. Additional provisioners such as
   # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
   # documentation for more information about their specific syntax and use.
-  config.vm.provision "file", source: "../vuzzer-64bit", destination: "vuzzer"
-  config.vm.provision "file", source: "../vuzzer-symbex", destination: "vuzzer-symbex"
-  config.vm.provision "file", source: "../fuzz-test", destination: "fuzz-test"
+  config.vm.provision "pin", type: "file",
+                          source: "../pin-2.13-62732-gcc.4.4.7-linux.tar.gz",
+                          destination: "pin-2.13-62732-gcc.4.4.7-linux.tar.gz"
+  config.vm.provision "vu-file", type: "file",
+                      source: "../vuzzer-64bit", destination: "vuzzer"
+
+  config.vm.provision "vu-pickles", type: "file",
+                      source: "../vuzzer-pickles", destination: "vuzzer-pickles"
+
+  config.vm.provision "testcases", type: "file",
+                      source: "../testcases", destination: "testcases"
+
+  config.vm.synced_folder "work/vuzzer", "/work"
 
   config.vm.provision "main", type: "shell", inline: <<-SHELL
     apt-get update
-    apt-get install -y g++ git cmake3 pkg-config automake autoconf libtool \
-      libzmq3-dev python python-pip libdwarf-dev libelf-dev libssl-dev \
-      libpng-dev python-dev libffi-dev build-essential
+    apt-get install -y g++ git python build-essential
+    # vuzzer/libdft64 requirements
+    apt-get install -y python-pip libdwarf-dev libelf-dev libssl-dev
+    # libjpeg-turbo requirements
+    apt-get install -y autoconf automake libtool nasm
 
     pip install -U pip setuptools
-    pip install --upgrade --force-reinstall angr angr-utils bitvector
-    pip install -I --no-binary :all: capstone
+    pip install --upgrade --force-reinstall bitvector
 
     # install custom deps in /opt
     pushd /opt
-
-    # install cpputest (required by Collections-C)
-    if [ ! -f "/usr/local/lib/libCppUTest.a" ]; then
-      rm -rf cpputest
-      git clone --depth 1 git://github.com/cpputest/cpputest.git
-      cd cpputest/cpputest_build
-      autoreconf .. -i
-      ../configure
-      make
-      make install
-      cd ../../
-    else
-      echo "cpputest already installed"
-    fi
-
-    # install Collections-C (required by driver's code)
-    if [ ! -f "/usr/local/lib/libcollectc.a" ]; then
-      rm -rf Collections-C
-      git clone --depth 1 https://github.com/srdja/Collections-C.git
-      cd Collections-C
-      mkdir build
-      cd build
-      CFLAGS=-std=c99 cmake ..
-      make
-      make install
-    else
-      echo "Collections-C already installed"
-    fi
 
     # install EWAHBoolArray
     if [ ! -d EWAHBoolArray ]; then
@@ -121,12 +104,10 @@ Vagrant.configure("2") do |config|
   SHELL
 
   config.vm.provision "vuzzer", type: "shell", privileged: false, inline: <<-SHELL
-    pindir=pin-2.14-71313-gcc.4.4.7-linux
-    pinzip=$pindir.tar.gz
-    if [ ! -d $pindir ]; then
-      wget -q http://software.intel.com/sites/landingpage/pintool/downloads/$pinzip
+    pindir=pin-2.13-62732-gcc.4.4.7-linux
+    if [[ ! -d $pindir ]]; then
+      tar xzf $pindir.tar.gz
     fi
-    tar xzf $pinzip
     export PIN_ROOT=$HOME/$pindir
     export PIN_HOME=$HOME/$pindir
     # install vuzzer
@@ -145,13 +126,33 @@ Vagrant.configure("2") do |config|
     cd ..
   SHELL
 
+  config.vm.provision "vu-setup", type: "shell", inline: <<-SHELL
+    echo 0 | tee /proc/sys/kernel/randomize_va_space
+    echo 0 | tee /proc/sys/kernel/yama/ptrace_scope
+    mount -t tmpfs -o size=1024M tmpfs vuzzer/fuzzer-code/vutemp
+    rm -rf /home/vagrant/.vuenv
+    echo "export PIN_ROOT=/home/vagrant/pin-2.13-62732-gcc.4.4.7-linux" >> /home/vagrant/.vuenv
+    echo "export VUZZER_ROOT=/home/vagrant/vuzzer" >> /home/vagrant/.vuenv
+  SHELL
+
+  config.vm.provision "vu-restore", type: "shell", inline: <<-SHELL
+    echo 1 | tee /proc/sys/kernel/randomize_va_space
+    echo 1 | tee /proc/sys/kernel/yama/ptrace_scope
+    umount vuzzer/fuzzer-code/vutemp
+    rm -rf /home/vagrant/.vuenv
+  SHELL
+
   config.vm.provision "suts", type: "shell", privileged: false, inline: <<-SHELL
-    # get and build gif2png
-    if [ ! -d gif2png ]; then
-      git clone --depth 1 https://gitlab.com/esr/gif2png.git
+    if [ ! -d libjpeg-turbo ]; then
+      wget -nv https://github.com/libjpeg-turbo/libjpeg-turbo/archive/1.5.1.tar.gz
+      tar -xzf 1.5.1.tar.gz
+      rm 1.5.1.tar.gz
+
+      cd libjpeg-turbo-1.5.1/
+      autoreconf -fiv
+      cd release
+      sh ../configure LDFLAGS=-static && make
+      cd ../..
     fi
-    cd gif2png
-    make clean gif2png
-    cd ..
   SHELL
 end

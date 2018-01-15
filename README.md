@@ -55,6 +55,12 @@ example:
 `./master/target/release/master -f aflfst -f vuzzer -f honggfuzz -H -s -- djpeg @@`
 
 
+#### Setting-up VUzzer
+
+Start VM with `vagrant up` (set up vuzzer directory in `work` first), then
+`vagrant provision --provision-with vu-setup`.
+
+
 ### Run standalone drivers
 ```sh
 timeout -k 3 $((60 * 60 * 4)) ./driver/driver -i vuzzer -f ./work/vuzzer.vu.conf \
