@@ -6,12 +6,10 @@ use std::process::{Child, Command, Stdio};
 use master;
 
 
-const DEFAULT_SECTION: &'static str = ".text";
-const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
 const DRIVER_EXE: &'static str = "./driver/driver";
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FuzzerType {
     AFL,
     Honggfuzz,
@@ -23,7 +21,7 @@ impl FuzzerType {
         match self {
             &FuzzerType::AFL => "out/inject/queue",
             &FuzzerType::Honggfuzz => "out/inject",
-            &FuzzerType::VUzzer => "out"
+            &FuzzerType::VUzzer => "special"
         }
     }
 }
@@ -55,11 +53,12 @@ impl ToString for FuzzerType {
 pub struct Driver {
     fuzzer_id: String,
     fuzzer_type: FuzzerType,
-    section_name: String,
+    section_name: Option<String>,
     fuzzer_cmd_filename: String,
-    basic_block_script: String,
+    basic_block_script: Option<String>,
     fuzzer_corpus_path: String,
     fuzzer_log_filename: String,
+    fuzzer_log_err_filename: String,
     interesting_port: u32,
     use_port: u32,
     metric_port: u32,
@@ -73,24 +72,25 @@ pub struct Driver {
 
 impl Driver {
     pub fn with_defaults(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
-                         sut_input_file: Option<String>, metric_port: u32, work_path: String)
+                         sut_input_file: Option<String>, metric_port: u32, work_path: String,
+                         basic_block_script: Option<String>, section_name: Option<String>)
                          -> Driver
     {
         Driver::new(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, work_path,
-            None, None, None, None)
+            basic_block_script, section_name, None, None)
     }
 
     pub fn new<OS, OU>(fuzzer_id: String, fuzzer_type: FuzzerType, sut: Vec<String>,
                        sut_input_file: Option<String>, metric_port: u32, work_path: String,
-                       interesting_port: OU, use_port: OU, section_name: OS,
-                       basic_block_script: OS) -> Driver
+                       basic_block_script: OS, section_name: OS, interesting_port: OU, use_port: OU)
+                       -> Driver
                        where OS: Into<Option<String>>,
                              OU: Into<Option<u32>>
     {
         let corpus_path = match fuzzer_type {
             FuzzerType::AFL => format!("out/{}/queue", fuzzer_id),
             FuzzerType::Honggfuzz => "in".to_string(),
-            FuzzerType::VUzzer => "out".to_string()
+            FuzzerType::VUzzer => "special".to_string()
         };
 
         let inject_path = fuzzer_type.get_inject_path();
@@ -98,11 +98,12 @@ impl Driver {
         Driver {
             fuzzer_id: fuzzer_id.clone(),
             fuzzer_type: fuzzer_type,
-            section_name: section_name.into().unwrap_or(DEFAULT_SECTION.to_string()),
+            section_name: section_name.into(),
             fuzzer_cmd_filename: format!("{}/{}.{}.conf", work_path, fuzzer_id, fuzzer_type.to_string()),
-            basic_block_script: basic_block_script.into().unwrap_or(DEFAULT_BB_SCRIPT.to_string()),
+            basic_block_script: basic_block_script.into(),
             fuzzer_corpus_path: format!("{}/{}/{}", work_path, fuzzer_id, corpus_path),
             fuzzer_log_filename: format!("{}/{}.fuzz.log", work_path, fuzzer_id),
+            fuzzer_log_err_filename: format!("{}/{}.fuzz.err.log", work_path, fuzzer_id),
             interesting_port: interesting_port.into().unwrap_or(master::INTERESTING_PORT),
             use_port: use_port.into().unwrap_or(master::USE_PORT),
             metric_port: metric_port,
@@ -121,15 +122,22 @@ impl Driver {
 
         let mut args = vec![
             "-i", &self.fuzzer_id,
-            "-s", &self.section_name,
             "-f", &self.fuzzer_cmd_filename,
-            "-b", &self.basic_block_script,
             "-c", &self.fuzzer_corpus_path,
             "-l", &self.fuzzer_log_filename,
+            "-L", &self.fuzzer_log_err_filename,
             "-p", &ports,
             "-d", &self.data_path,
             "-j", &self.inject_path
         ];
+
+        if let Some(ref basic_block_script) = self.basic_block_script {
+            args.extend_from_slice(&["-b", basic_block_script]);
+        }
+
+        if let Some(ref section_name) = self.section_name {
+            args.extend_from_slice(&["-s", section_name]);
+        }
 
         if let Some(ref sut_input_file) = self.sut_input_file {
             args.extend_from_slice(&["-F", sut_input_file]);
@@ -146,7 +154,7 @@ impl Driver {
             .expect(&format!("failed to spawn driver {}", self.fuzzer_id))
     }
 
-    pub fn get_metric_port(&self) -> u32 {
-        self.metric_port
-    }
+    pub fn get_metric_port(&self) -> u32 { self.metric_port }
+
+    pub fn is_vuzzer(&self) -> bool { self.fuzzer_type == FuzzerType::VUzzer }
 }

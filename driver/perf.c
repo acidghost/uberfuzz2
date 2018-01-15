@@ -19,12 +19,13 @@
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 
-#define PERF_MAP_PG 512
-#define PERF_MAP_SZ (getpagesize() * (PERF_MAP_PG + 1))
-#define PERF_AUX_PG 1024
-#define PERF_AUX_SZ (getpagesize() * PERF_AUX_PG)
+#define PERF_MAP_SZ ((1024 * 512) + getpagesize())
+#define PERF_AUX_SZ (1024 * 1024)
+
+#define CHILD_TIMEOUT_MICRO 60000000            // 1 minute
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
@@ -48,23 +49,28 @@ typedef struct gbl_status {
     void *mmap_aux;
 } gbl_status_t;
 
-int32_t perf_bts_type = -1;
+static int32_t perf_bts_type = -1;
 enum llevel_t log_level = DEBUG;
 
-gbl_status_t gbl_status = {
+static gbl_status_t gbl_status = {
     -1, -1, 0, NULL, NULL
 };
 
 
-static inline long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
-                                   int cpu, int group_fd, unsigned long flags)
+static inline long
+perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
+                int cpu, int group_fd, unsigned long flags)
 {
     return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
 }
 
 
-static bool perf_init(void)
+static bool
+perf_init(void)
 {
+    if (perf_bts_type != -1)
+        return true;
+
     int fd = open("/sys/bus/event_source/devices/intel_bts/type", O_RDONLY | O_CLOEXEC);
     if (fd == -1) {
         PLOG_F("Intel BTS not supported");
@@ -87,16 +93,16 @@ static bool perf_init(void)
 }
 
 
-static void analyze_bts(bts_branch_t **bts_start, uint64_t *count)
+static void
+analyze_bts(bts_branch_t **bts_start, uint64_t *count)
 {
     struct perf_event_mmap_page *pem = (struct perf_event_mmap_page *) gbl_status.mmap_buf;
     uint64_t aux_head = ATOMIC_GET(pem->aux_head);
-    rmb();
     bts_branch_t *br = (bts_branch_t *) gbl_status.mmap_aux;
 
     if (bts_start != NULL && count != NULL) {
         *bts_start = br;
-        *count = ((bts_branch_t *)(gbl_status.mmap_aux + aux_head) - br);
+        *count = aux_head / sizeof(bts_branch_t);
         return;
     }
 
@@ -114,7 +120,8 @@ static void analyze_bts(bts_branch_t **bts_start, uint64_t *count)
 }
 
 
-static void perf_sig_handler(int signum, siginfo_t *siginfo, void *dummy)
+static void
+perf_sig_handler(int signum, siginfo_t *siginfo, void *dummy)
 {
     if (signum == SIGIO) {
         kill(gbl_status.child_pid, SIGTRAP);
@@ -123,7 +130,17 @@ static void perf_sig_handler(int signum, siginfo_t *siginfo, void *dummy)
 }
 
 
-static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
+static uint64_t
+get_delta_micro(struct timespec *start)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+    return (now.tv_sec - start->tv_sec) * 1000000 + (now.tv_nsec - start->tv_nsec) / 1000;
+}
+
+
+static int32_t
+perf_parent(bts_branch_t **bts_start, uint64_t *count)
 {
     struct sigaction sa;
     memset(&sa, 0, sizeof(struct sigaction));
@@ -146,7 +163,8 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
         goto bail_perf_open;
     }
 
-    gbl_status.mmap_buf = mmap(NULL, PERF_MAP_SZ, PROT_READ | PROT_WRITE, MAP_SHARED, gbl_status.perf_fd, 0);
+    gbl_status.mmap_buf = mmap(NULL, PERF_MAP_SZ, PROT_READ | PROT_WRITE, MAP_SHARED,
+        gbl_status.perf_fd, 0);
     if (gbl_status.mmap_buf == MAP_FAILED) {
         PLOG_F("failed mmap perf buffer, sz=%zu", (size_t) PERF_MAP_SZ);
         goto bail_perf_buf;
@@ -155,7 +173,8 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
     struct perf_event_mmap_page *pem = (struct perf_event_mmap_page *) gbl_status.mmap_buf;
     pem->aux_offset = pem->data_offset + pem->data_size;
     pem->aux_size = PERF_AUX_SZ;
-    gbl_status.mmap_aux = mmap(NULL, pem->aux_size, PROT_READ, MAP_SHARED, gbl_status.perf_fd, pem->aux_offset);
+    gbl_status.mmap_aux = mmap(NULL, pem->aux_size, PROT_READ, MAP_SHARED,
+        gbl_status.perf_fd, pem->aux_offset);
     if (gbl_status.mmap_aux == MAP_FAILED) {
         PLOG_F("failed mmap perf aux, sz=%zu", (size_t) PERF_AUX_SZ);
         goto bail_perf_aux;
@@ -166,11 +185,32 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
     fcntl(gbl_status.perf_fd, F_SETOWN, getpid());
     ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_ENABLE, 0);
 
+    struct timespec start_time;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
+
     int status;
     int wait_ret;
     while (1) {
         LOG_D("waiting for child PID=%lu", gbl_status.child_pid);
-        wait_ret = waitpid(gbl_status.child_pid, &status, 0);
+        wait_ret = waitpid(gbl_status.child_pid, &status, WNOHANG);
+        if (wait_ret == 0) {
+            uint64_t delta_time = get_delta_micro(&start_time);
+            if (delta_time > CHILD_TIMEOUT_MICRO) {
+                if (kill(gbl_status.child_pid, SIGKILL) == -1) {
+                    PLOG_F("failed to kill child PID=%lu after %" PRIu64 " millis",
+                        gbl_status.child_pid, delta_time);
+                    goto bail_perf_wait;
+                }
+                if (waitpid(gbl_status.child_pid, NULL, 0) == -1) {
+                    PLOG_F("failed waiting dieing child PID=%lu",
+                        gbl_status.child_pid);
+                    goto bail_perf_wait;
+                }
+                break;
+            }
+            usleep(50);
+            continue;
+        }
         if (wait_ret == -1 && errno == EINTR) {
             continue;
         }
@@ -178,10 +218,12 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
             PLOG_F("failed waiting for child PID=%lu", gbl_status.child_pid);
             goto bail_perf_wait;
         }
-        if (gbl_status.data_ready > 0) {
-            gbl_status.data_ready--;
-            analyze_bts(bts_start, count);
-        }
+        // if (gbl_status.data_ready > 0) {
+        //     gbl_status.data_ready--;
+        //     ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+        //     analyze_bts(bts_start, count);
+        //     ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_ENABLE, 0);
+        // }
         if (WIFEXITED(status)) {
             LOG_D("child terminated with status %d", WEXITSTATUS(status));
             break;
@@ -198,11 +240,8 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
         }
     }
 
+    ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_DISABLE, 0);
     analyze_bts(bts_start, count);
-    ATOMIC_SET(pem->data_head, 0);
-    ATOMIC_SET(pem->data_tail, 0);
-    ATOMIC_SET(pem->aux_head, 0);
-    ATOMIC_SET(pem->aux_tail, 0);
     return PERF_SUCCESS;
 
 bail_perf_wait:
@@ -217,7 +256,8 @@ bail_perf_open:
 }
 
 
-static int32_t perf_child(char const **argv)
+static int32_t
+perf_child(char const **argv)
 {
     int null_fd = open("/dev/null", O_WRONLY);
     if (null_fd == -1) {
@@ -238,13 +278,20 @@ static int32_t perf_child(char const **argv)
 }
 
 
-static void perf_close(void)
+void
+perf_close(void)
 {
     if (gbl_status.mmap_aux != NULL) {
         munmap(gbl_status.mmap_aux, PERF_AUX_SZ);
         gbl_status.mmap_aux = NULL;
     }
     if (gbl_status.mmap_buf != NULL) {
+        struct perf_event_mmap_page *pem = (struct perf_event_mmap_page *) gbl_status.mmap_buf;
+        ATOMIC_SET(pem->data_head, 0);
+        ATOMIC_SET(pem->data_tail, 0);
+        ATOMIC_SET(pem->aux_head, 0);
+        ATOMIC_SET(pem->aux_tail, 0);
+        ioctl(gbl_status.perf_fd, PERF_EVENT_IOC_RESET, 0);
         munmap(gbl_status.mmap_buf, PERF_MAP_SZ);
         gbl_status.mmap_buf = NULL;
     }
@@ -255,7 +302,8 @@ static void perf_close(void)
 }
 
 
-void perf_monitor(char const **argv)
+void
+perf_monitor(char const **argv)
 {
     perf_close();
     if (!perf_init()) {
@@ -276,9 +324,10 @@ void perf_monitor(char const **argv)
 }
 
 
-int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **argv,
-                         const char *input_filename, const bool use_stdin,
-                         bts_branch_t **bts_start, uint64_t *count)
+int32_t
+perf_monitor_api(const uint8_t *data, size_t data_count, char const **argv,
+                 const char *input_filename, const bool use_stdin,
+                 bts_branch_t **bts_start, uint64_t *count)
 {
     perf_close();
     if (!perf_init()) {

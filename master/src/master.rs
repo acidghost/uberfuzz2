@@ -20,16 +20,20 @@ use time::{Duration, PreciseTime};
 
 use rand::{Rng, thread_rng};
 
+use inotify::{WatchMask, Inotify, WatchDescriptor};
+
 use driver::{Driver, FuzzerType};
 use messages::{InterestingInput, ReqMetric, RepMetric};
+use common::{LOG_LINE_SEPARATOR, WORK_PATH};
 
 
-const WORK_PATH: &'static str = "./work";
 pub const INTERESTING_PORT: u32 = 1337;
 pub const USE_PORT: u32 = INTERESTING_PORT + 1;
 pub const METRIC_PORT_START: u32 = USE_PORT + 1;
 const BIND_ADDR: &'static str = "tcp://*";
 const CONN_ADDR: &'static str = "tcp://localhost";
+const DEFAULT_BB_SCRIPT: &'static str = "./r2.sh -b";
+const DEFAULT_SECTION: &'static str = ".text";
 
 
 enum WinningStrategy {
@@ -45,9 +49,17 @@ struct InterestingWithTime {
 
 impl ToString for InterestingWithTime {
     fn to_string(&self) -> String {
-        format!("{},{},{},{}", self.elapsed_time.num_milliseconds(), self.input_message.fuzzer_id,
-            self.input_message.input_path, self.input_message.coverage_path)
+        format!("{}{sep}{}{sep}{}{sep}{}", self.elapsed_time.num_milliseconds(),
+            self.input_message.fuzzer_id, self.input_message.input_path,
+            self.input_message.coverage_path, sep=LOG_LINE_SEPARATOR)
     }
+}
+
+
+struct WatchDescriptorData {
+    fuzzer_id: String,
+    modified: usize,
+    ready: bool
 }
 
 
@@ -62,8 +74,12 @@ pub struct Master {
     start_time: Option<PreciseTime>,
     work_path: String,
     interesting_log: Vec<InterestingWithTime>,
-    interesting_log_file: Option<File>
+    interesting_log_file: Option<File>,
+    winning_log_file: Option<File>
 }
+
+
+type BestInterestingMap = HashMap<String, Vec<(InterestingInput, RepMetric)>>;
 
 
 impl Master {
@@ -82,6 +98,8 @@ impl Master {
         opts.optflag("H", "high", "High or low winning strategy");
         opts.optopt("t", "winning-threshold", "Winning strategy threshold", "0.42");
         opts.optflag("s", "stdin", "Target reads from standard input");
+        opts.optflag("B", "basic-blocks", "Drivers use basic blocks from static analysis");
+        opts.optflag("S", "section", "Drivers use only the .text section of the target");
 
         let matches = opts.parse(&args[1..]).map_err(|f| f.to_string())?;
 
@@ -109,6 +127,14 @@ impl Master {
         }
 
         debug!("found conf files: {:?}", conf_files);
+
+        let bb_script = if matches.opt_present("B") {
+            Some(DEFAULT_BB_SCRIPT.to_string())
+        } else { None };
+
+        let section_name = if matches.opt_present("S") {
+            Some(DEFAULT_SECTION.to_string())
+        } else { None };
 
         let mut drivers_map = HashMap::new();
         let mut metric_port = METRIC_PORT_START;
@@ -148,7 +174,9 @@ impl Master {
             }).collect();
 
             drivers_map.insert(fuzzer_id.clone(),
-                Driver::with_defaults(fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, wp));
+                Driver::with_defaults(
+                    fuzzer_id, fuzzer_type, sut, sut_input_file, metric_port, wp,
+                    bb_script.clone(), section_name.clone()));
 
             metric_port += 1;
         }
@@ -174,7 +202,8 @@ impl Master {
             start_time: None,
             work_path: WORK_PATH.to_string(),
             interesting_log: vec![],
-            interesting_log_file: None
+            interesting_log_file: None,
+            winning_log_file: None
         };
 
         Ok(m)
@@ -211,7 +240,7 @@ impl Master {
             self.use_pub = Some(socket);
         }
 
-        // open log file
+        // open inputs log file
         let interesting_log_filename = format!("{}/inputs.log", self.work_path);
         match File::create(&interesting_log_filename) {
             Ok(file) => self.interesting_log_file = Some(file),
@@ -221,12 +250,48 @@ impl Master {
             }
         }
 
+        // open winning log file
+        let winning_log_filename = format!("{}/winning.log", self.work_path);
+        match File::create(&winning_log_filename) {
+            Ok(file) => self.winning_log_file = Some(file),
+            Err(error) => {
+                error!("failed to open {}: {}", winning_log_filename, error);
+                return;
+            }
+        }
+
         self.start_time = Some(PreciseTime::now());
 
-        // spawn drivers
+        // spawn drivers and init inotify watchers
+        let mut inotify = match Inotify::init() {
+            Ok(x) => x,
+            Err(e) => {
+                error!("failed to init inotify: {}", e);
+                return;
+            }
+        };
+        let mut watch_descriptors: HashMap<WatchDescriptor, WatchDescriptorData> = HashMap::new();
+        let mut inotify_buffer = [0u8; 4096];
         for (fuzzer_id, driver) in &self.drivers {
             self.processes.insert(fuzzer_id.clone(), driver.spawn());
             info!("started {}", fuzzer_id);
+
+            if driver.is_vuzzer() {
+                let path_to_watch = format!("{}/{}", WORK_PATH, fuzzer_id);
+                let wd = match inotify.add_watch(path_to_watch, WatchMask::MODIFY) {
+                    Ok(wd) => wd,
+                    Err(e) => {
+                        error!("failed to add inotify watcher for {}: {}", fuzzer_id, e);
+                        return;
+                    }
+                };
+                let wd_data = WatchDescriptorData {
+                    fuzzer_id: fuzzer_id.clone(),
+                    modified: 0,
+                    ready: false
+                };
+                watch_descriptors.insert(wd, wd_data);
+            }
         }
 
         // setup ctrlc handler
@@ -251,6 +316,15 @@ impl Master {
             self.metric_reqs.insert(fuzzer_id.clone(), socket);
         }
 
+        // this table contains the best interesting input for slower fuzzers that need throttling
+        let mut best_interesting: BestInterestingMap = HashMap::new();
+        for wdata in watch_descriptors.values() {
+            best_interesting.insert(wdata.fuzzer_id.clone(), vec![]);
+        }
+
+        let high_strategy = self.get_high_strategy();
+        let mut pulled_interesting = false;
+        let mut pending_newline = false;
         'outer: while !interrupted.load(Ordering::Relaxed) {
             // check drivers liveness
             for (fuzzer_id, process) in &mut self.processes {
@@ -268,23 +342,103 @@ impl Master {
                 }
             }
 
+            // check inotify events
+            match inotify.read_events(&mut inotify_buffer) {
+                Ok(events) => {
+                    for event in events {
+                        if event.name.is_some() && event.name.unwrap() == "stats.log" {
+                            let wd_data = watch_descriptors.get_mut(&event.wd).unwrap();
+                            wd_data.modified += 1;
+                            if wd_data.modified > 1 {
+                                wd_data.ready = true;
+                            }
+                            debug!("inotify event on {} (modified {})",
+                                wd_data.fuzzer_id, wd_data.modified);
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("failed to read inotify events: {}", e);
+                    break;
+                }
+            };
+
             // try pulling new interesting input and process any
             match self.pull_interesting() {
                 Ok(Some(interesting)) => {
+                    if pending_newline {
+                        print!("\r");
+                        pending_newline = false;
+                    }
+                    pulled_interesting = true;
                     if let Err(e) = self.log_interesting(&interesting) {
                         error!("failed logging: {}", e);
                         break;
                     }
 
-                    if let Err(e) = self.process_interesting(interesting) {
+                    let process_res = self.process_interesting(interesting,
+                        watch_descriptors.values(), &mut best_interesting);
+                    if let Err(e) = process_res {
                         error!("failed to process interesting: {}", e);
                         break;
                     }
                 },
-                Ok(None) => (),
+                Ok(None) => {
+                    if !pulled_interesting && pending_newline {
+                        print!("\r");
+                    }
+                    let t = self.start_time.unwrap().to(PreciseTime::now());
+                    print!("{:02}:{:02}:{:02}",
+                        t.num_hours(), t.num_minutes() % 60, t.num_seconds() % 60);
+                    pulled_interesting = false;
+                    pending_newline = true;
+                },
                 Err(e) => {
                     error!("failed to pull interesting: {}", e);
                     break;
+                }
+            }
+
+            // check if watched fuzzers are ready and send the best of collected interesting inputs
+            for wdata in watch_descriptors.values_mut() {
+                if !wdata.ready { continue; }
+
+                let best_vec = best_interesting.get_mut(&wdata.fuzzer_id).unwrap();
+                best_vec.sort_unstable_by(|t1, t2| {
+                    let m1 = &t1.1.metric;
+                    let m2 = &t2.1.metric;
+                    m1.partial_cmp(m2).unwrap_or(::std::cmp::Ordering::Equal)
+                });
+
+                let best = (if high_strategy { best_vec.last() } else { best_vec.first() })
+                    .map(|t| t.to_owned());
+
+                if let Some((ref b, ref m)) = best {
+                    let assign_res = self.assign_input(b, &[wdata.fuzzer_id.clone()]);
+                    if let Err(e) = assign_res {
+                        error!("failed to assign to {}: {}", wdata.fuzzer_id, e);
+                        break 'outer;
+                    }
+                    if pending_newline {
+                        print!("\r");
+                    }
+                    let t = self.start_time.unwrap().to(PreciseTime::now());
+                    println!("{:02}:{:02}:{:02} - {} - {} {}",
+                        t.num_hours(), t.num_minutes() % 60, t.num_seconds() % 60,
+                        b.fuzzer_id, wdata.fuzzer_id, m.metric);
+                    pending_newline = false;
+                    wdata.ready = false;
+                    best_vec.clear();
+
+                    if let Some(ref mut file) = self.winning_log_file {
+                        let line = format!("{}{sep}{}{sep}{}\n",
+                            t.num_milliseconds(), b.fuzzer_id, wdata.fuzzer_id,
+                            sep=LOG_LINE_SEPARATOR);
+                        if let Err(e) = file.write_all(line.as_bytes()) {
+                            error!("failed writing to {}: {}", winning_log_filename, e);
+                            break 'outer;
+                        }
+                    }
                 }
             }
 
@@ -322,31 +476,74 @@ impl Master {
         Ok(())
     }
 
-    fn process_interesting(&self, interesting_input: InterestingInput)
+    fn get_high_strategy(&self) -> bool {
+        match self.winning_strategy {
+            WinningStrategy::SingleWinner(highest) => highest,
+            WinningStrategy::MultipleWinners(_, higher) => higher
+        }
+    }
+
+    fn process_interesting<'a, W>(&mut self, interesting_input: InterestingInput, watch_data: W,
+        best_interesting: &mut BestInterestingMap)
         -> Result<(), String>
+        where W: Iterator<Item=&'a WatchDescriptorData>
     {
-        info!("new input from {}", interesting_input.fuzzer_id);
+        let start_processing_duration = self.start_time.unwrap().to(PreciseTime::now());
 
         let metrics = self.evaluate_interesting(&interesting_input)?;
-        info!("metrics:{}", metrics.iter().map(|t| format!("({} {})", t.0, t.1.metric))
-            .collect::<Vec<_>>().join(" "));
 
-        let winning_drivers = self.metric_winners(&metrics)?;
+        // update best_interesting table
+        for (fuzzer_id, metric_rep) in &metrics {
+            if metric_rep.metric == 0.0 { continue; }
+            if let Some(best_vec) = best_interesting.get_mut(fuzzer_id) {
+                best_vec.push((interesting_input.clone(), metric_rep.clone()));
+            }
+        }
+
+        // if from VUzzer, broadcast it if metric is not zero
+        let winning_drivers = if self.drivers.get(&interesting_input.fuzzer_id).unwrap().is_vuzzer() {
+            self.drivers.keys().filter_map(|f| {
+                // if the sender is not f, then check metric value (metric must exist for f)
+                if *f == interesting_input.fuzzer_id || metrics.get(f).unwrap().metric == 0.0 { None }
+                else { Some(f.to_owned()) }
+            }).collect()
+        } else {
+            let mut metrics_c = metrics.clone();
+            for wdata in watch_data {
+                metrics_c.remove(&wdata.fuzzer_id);
+            }
+            self.metric_winners(&metrics_c)?
+        };
 
         if !winning_drivers.is_empty() {
-            let winning_drivers_str = winning_drivers.join(" - ");
-            info!("winning drivers: {}", winning_drivers_str);
             self.assign_input(&interesting_input, &winning_drivers)?;
-            info!("input sent to {}", winning_drivers_str);
-        } else {
-            debug!("no winning driver");
+
+            // log competition
+            if let Some(ref mut file) = self.winning_log_file {
+                let mut winning_drivers_sort = winning_drivers.clone();
+                winning_drivers_sort.sort();
+                let line = format!("{}{sep}{}{sep}{}\n",
+                    start_processing_duration.num_milliseconds(), interesting_input.fuzzer_id,
+                    winning_drivers_sort.join("_"), sep=LOG_LINE_SEPARATOR);
+                file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+            }
         }
+
+        println!("{:02}:{:02}:{:02} - {} - {} - {}",
+            start_processing_duration.num_hours(),
+            start_processing_duration.num_minutes() % 60,
+            start_processing_duration.num_seconds() % 60,
+            interesting_input.fuzzer_id,
+            metrics.iter().map(|t| format!("{} {}", t.0, t.1.metric))
+             .collect::<Vec<_>>().join(" / "),
+            if winning_drivers.len() > 0 { winning_drivers.join(" ") }
+            else { "none".to_string() });
 
         Ok(())
     }
 
     fn evaluate_interesting(&self, interesting_input: &InterestingInput)
-        -> Result<HashMap<&str, RepMetric>, String>
+        -> Result<HashMap<String, RepMetric>, String>
     {
         let mut metrics = HashMap::new();
         let request = ReqMetric { coverage_path: interesting_input.coverage_path.clone() };
@@ -367,14 +564,14 @@ impl Master {
                 format!("error parsing metric rep from {}: {}", fuzzer_id, e)
             })?;
 
-            metrics.insert(fuzzer_id.as_str(), rep);
+            metrics.insert(fuzzer_id.clone(), rep);
         }
 
         Ok(metrics)
     }
 
-    fn metric_winners<'a>(&self, metrics: &HashMap<&'a str, RepMetric>)
-        -> Result<Vec<&'a str>, String>
+    fn metric_winners(&self, metrics: &HashMap<String, RepMetric>)
+        -> Result<Vec<String>, String>
     {
         let winning_drivers = match self.winning_strategy {
             WinningStrategy::SingleWinner(highest) => {
@@ -392,8 +589,8 @@ impl Master {
         Ok(winning_drivers)
     }
 
-    fn metric_single_winner<'a>(metrics: &HashMap<&'a str, RepMetric>, highest: bool)
-        -> Result<Option<&'a str>, String>
+    fn metric_single_winner(metrics: &HashMap<String, RepMetric>, highest: bool)
+        -> Result<Option<String>, String>
     {
         if metrics.iter().all(|tpl| tpl.1.metric == 0.0) {
             return Ok(None);
@@ -418,17 +615,17 @@ impl Master {
             }
         }
 
-        Ok(Some(winning_key))
+        Ok(Some(winning_key.clone()))
     }
 
-    fn metric_multiple_winners<'a>(metrics: &HashMap<&'a str, RepMetric>, threshold: f64, higher: bool)
-        -> Result<Vec<&'a str>, String>
+    fn metric_multiple_winners(metrics: &HashMap<String, RepMetric>, threshold: f64, higher: bool)
+        -> Result<Vec<String>, String>
     {
         let mut winners = vec![];
 
         for (k, v) in metrics {
             if (higher && v.metric > threshold) || (!higher && v.metric < threshold) {
-                winners.push(*k);
+                winners.push(k.clone());
             }
         }
 
@@ -436,7 +633,7 @@ impl Master {
 
     }
 
-    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_ids: &[&str])
+    fn assign_input(&self, interesting_input: &InterestingInput, fuzzer_ids: &[String])
         -> Result<(), String>
     {
         let input = interesting_input.use_for(fuzzer_ids);

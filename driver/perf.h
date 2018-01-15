@@ -19,4 +19,6 @@ int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **ar
                          const char *input_filename, const bool use_stdin,
                          bts_branch_t **bts_start, uint64_t *count);
 
+void perf_close(void);
+
 #endif

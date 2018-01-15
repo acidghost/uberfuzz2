@@ -1,4 +1,6 @@
 *
-!setup_dir.sh
+!*.sh
+!*.plt
 !.gitignore
 !*.conf
+!stored_work
