@@ -143,7 +143,7 @@ Vagrant.configure("2") do |config|
   SHELL
 
   config.vm.provision "suts", type: "shell", privileged: false, inline: <<-SHELL
-    if [ ! -d libjpeg-turbo ]; then
+    if [[ ! -d libjpeg-turbo-1.5.1 ]]; then
       wget -nv https://github.com/libjpeg-turbo/libjpeg-turbo/archive/1.5.1.tar.gz
       tar -xzf 1.5.1.tar.gz
       rm 1.5.1.tar.gz
@@ -152,7 +152,22 @@ Vagrant.configure("2") do |config|
       autoreconf -fiv
       cd release
       sh ../configure LDFLAGS=-static && make
-      cd ../..
+      cd ~
+    fi
+
+    if [[ ! -d libpng-1.6.29 ]]; then
+      wget -nv https://github.com/acidghost/libpng/archive/v1.6.29-uberfuzz1.tar.gz
+      tar -zxf v1.6.29-uberfuzz1.tar.gz
+      rm v1.6.29-uberfuzz1.tar.gz
+      mv libpng-1.6.29-uberfuzz1 libpng-1.6.29
+
+      cd libpng-1.6.29
+      cp scripts/pnglibconf.h.prebuilt pnglibconf.h
+      cp scripts/makefile.linux makefile
+      make test
+      cd contrib/libtests
+      gcc -O3 -Wall readpng.c -o readpng ../../libpng.a -lz -lm
+      cd ~
     fi
   SHELL
 end
