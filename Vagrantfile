@@ -169,5 +169,16 @@ Vagrant.configure("2") do |config|
       gcc -O3 -Wall readpng.c -o readpng ../../libpng.a -lz -lm
       cd ~
     fi
+
+    if [[ ! -d binutils-2.18 ]]; then
+      wget -nv https://ftp.gnu.org/gnu/binutils/binutils-2.28.tar.gz
+      tar -xzf binutils-2.28.tar.gz
+      rm binutils-2.28.tar.gz
+
+      cd binutils-2.28
+      ./configure
+      make
+      cd ~
+    fi
   SHELL
 end
