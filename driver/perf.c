@@ -25,7 +25,7 @@
 #define PERF_MAP_SZ ((1024 * 512) + getpagesize())
 #define PERF_AUX_SZ (1024 * 1024)
 
-#define CHILD_TIMEOUT_MICRO 60000000            // 1 minute
+#define CHILD_TIMEOUT_MICRO 1000000            // 1 second
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
