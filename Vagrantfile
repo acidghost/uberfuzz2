@@ -170,7 +170,7 @@ Vagrant.configure("2") do |config|
       cd ~
     fi
 
-    if [[ ! -d binutils-2.18 ]]; then
+    if [[ ! -d binutils-2.28 ]]; then
       wget -nv https://ftp.gnu.org/gnu/binutils/binutils-2.28.tar.gz
       tar -xzf binutils-2.28.tar.gz
       rm binutils-2.28.tar.gz
