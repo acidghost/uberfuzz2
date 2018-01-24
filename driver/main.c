@@ -14,6 +14,7 @@
 #include <zmq.h>
 #include <signal.h>
 #include <sys/fcntl.h>
+#include <sys/wait.h>
 #include <collectc/hashtable.h>
 #include <collectc/hashset.h>
 #include <libgen.h>
@@ -25,6 +26,7 @@ typedef struct driver {
     char **fuzzer;
     size_t fuzzer_n;
     pid_t fuzzer_pid;
+    bool fuzzer_running;
     const char **sut;
     const char *sut_input_file;
     bool sut_use_stdin;
@@ -487,6 +489,7 @@ driver_loop(driver_t *driver)
         LOG_F("failed to start fuzzer %s", driver->fuzzer[0]);
         return EXIT_FAILURE;
     }
+    driver->fuzzer_running = true;
     LOG_I("fuzzer %s started (pid=%d)", driver->fuzzer[0], driver->fuzzer_pid);
     clock_gettime(CLOCK_MONOTONIC_RAW, &driver->start_time);
 
@@ -498,9 +501,24 @@ driver_loop(driver_t *driver)
     }
 
     while (keep_running) {
-        if (kill(driver->fuzzer_pid, 0) == -1 && errno == ESRCH) {
-            LOG_I("fuzzer stopped, exiting");
+        int fuzzer_status = 0;
+        pid_t wait_res = waitpid(driver->fuzzer_pid, &fuzzer_status, WNOHANG);
+        if (wait_res == -1) {
+            PLOG_F("failed waitpid(%d)", driver->fuzzer_pid);
+            ret = EXIT_FAILURE;
             break;
+        } else if (wait_res > 0) {
+            if (WIFEXITED(fuzzer_status)) {
+                driver->fuzzer_running = false;
+                LOG_F("fuzzer exited with status %d", WEXITSTATUS(fuzzer_status));
+                ret = EXIT_FAILURE;
+                break;
+            } else if (WIFSIGNALED(fuzzer_status)) {
+                driver->fuzzer_running = false;
+                LOG_F("fuzzer terminated with signal %d", WTERMSIG(fuzzer_status));
+                ret = EXIT_FAILURE;
+                break;
+            }
         }
 
         if (!keep_running) {
@@ -735,9 +753,9 @@ free_driver(driver_t *driver)
     if (driver->coverage_log_fd != -1)
         close(driver->coverage_log_fd);
 
-    if (driver->fuzzer_pid > 0 && kill(driver->fuzzer_pid, SIGKILL) == -1) {
+    if (driver->fuzzer_running && driver->fuzzer_pid > 0 &&
+        kill(driver->fuzzer_pid, SIGKILL) == -1)
         PLOG_W("failed to kill fuzzer (pid=%d)", driver->fuzzer_pid);
-    }
 
     free(driver);
 }
