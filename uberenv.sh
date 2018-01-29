@@ -16,6 +16,8 @@ function uber_init_env {
   echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
   sudo sysctl kernel.perf_event_mlock_kb=300000000
   sudo sysctl kernel.perf_event_paranoid=1
+
+  vagrant up --provision-with vu-setup
 }
 
 function uber_restore_env {
@@ -30,6 +32,8 @@ function uber_restore_env {
   echo 1 | sudo tee /proc/sys/kernel/yama/ptrace_scope
   sudo sysctl kernel.perf_event_mlock_kb=30000
   sudo sysctl kernel.perf_event_paranoid=3
+
+  vagrant halt
 }
 
 if [[ "$1" = "start" ]]; then
