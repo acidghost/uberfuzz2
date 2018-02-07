@@ -2,20 +2,27 @@
 
 set -e
 
+TARGET=release
+INTERVALS="../master/target/$TARGET/intervals"
+
 glob=$1
 ticks=$2
 output=$3
-driver=''
 
 if [[ ( "$glob" = "" ) || ("$ticks" = "") || ("$output" = "") ]]; then
-  echo "usage: $0 glob ticks output [driver]"
+  echo "usage: $0 glob ticks output [single_fuzzers]"
   exit 1
 fi
 
-if [[ "$4" != "" ]]; then
-  driver='-r'
+shift 3
+
+if [[ "$1" != "" ]]; then
+  for fuzzer in "$@"; do
+    $INTERVALS -g "${glob}/${fuzzer}.coverage.log" -t $ticks -m -r > "${output}-${fuzzer}.dat"
+    gnuplot -p -c plot_ci.plt "${output}-${fuzzer}"
+  done
+else
+  $INTERVALS -g "${glob}/coverage.log" -t $ticks -m  > "$output.dat"
+  gnuplot -p -c plot_ci.plt $output
 fi;
 
-../master/target/release/intervals -g "${glob}" -t $ticks -m $driver > "$output.dat"
-
-gnuplot -p -c plot_ci.plt $output
