@@ -95,6 +95,7 @@ fn main() {
     opts.optopt("t", "timesteps", "Number of timesteps in runs", "480");
     opts.optflag("m", "machine", "Machine readable");
     opts.optflag("r", "raw", "Parse raw data from drivers");
+    opts.optflag("b", "best", "Get best of files at each timestep");
 
     let args: Vec<_> = env::args().collect();
     let matches = opts.parse(&args[1..]).map_err(|f| f.to_string()).unwrap();
@@ -108,6 +109,7 @@ fn main() {
     let timesteps: usize = matches.opt_str("t").unwrap().parse().unwrap();
     let machine_readable = matches.opt_present("m");
     let raw_data = matches.opt_present("r");
+    let get_best = matches.opt_present("b");
 
     let mut vectors: Vec<Vec<u64>> = Vec::new();
 
@@ -125,30 +127,46 @@ fn main() {
     }
 
     let n_vectors = vectors.len();
-    const Z: f64 = 1.96;        // 95% C.I.
-    let nv = n_vectors as f64;
-    let nvsqrt = nv.sqrt();
     let mut values = Vec::with_capacity(n_vectors);
-    let mut means: Vec<f64> = Vec::with_capacity(timesteps + 1);
-    let mut stdes: Vec<f64> = Vec::with_capacity(timesteps + 1);
-    for i in 0..timesteps+1 {
-        for vector in vectors.iter() {
-            values.push(vector[i]);
+
+    if get_best {
+        for i in 0..timesteps+1 {
+            for vector in vectors.iter() {
+                values.push(vector[i]);
+            }
+            let m = values.iter().cloned().max().unwrap();
+            if machine_readable {
+                println!("{} {}", i, m);
+            } else {
+                println!("{:8} {:>14}", i, m);
+            }
+            values.clear();
         }
+    } else {
+        const Z: f64 = 1.96;        // 95% C.I.
+        let nv = n_vectors as f64;
+        let nvsqrt = nv.sqrt();
+        let mut means: Vec<f64> = Vec::with_capacity(timesteps + 1);
+        let mut stdes: Vec<f64> = Vec::with_capacity(timesteps + 1);
+        for i in 0..timesteps+1 {
+            for vector in vectors.iter() {
+                values.push(vector[i]);
+            }
 
-        let mean_i = values.iter().sum::<u64>() as f64 / nv;
-        means.push(mean_i);
+            let mean_i = values.iter().sum::<u64>() as f64 / nv;
+            means.push(mean_i);
 
-        let var = values.iter().map(|vi| (*vi as f64 - mean_i).powi(2)).sum::<f64>() / (nv - 1f64);
-        stdes.push(Z * (var.sqrt() / nvsqrt));
+            let var = values.iter().map(|vi| (*vi as f64 - mean_i).powi(2)).sum::<f64>() / (nv - 1f64);
+            stdes.push(Z * (var.sqrt() / nvsqrt));
 
-        if machine_readable {
-            println!("{} {:.4} {:.4} {:.4}", i, mean_i, mean_i - stdes[i], mean_i + stdes[i]);
-        } else {
-            println!("{:8} {:>14.4} \u{00B1} {:<.4}", i, mean_i, stdes[i]);
+            if machine_readable {
+                println!("{} {:.4} {:.4} {:.4}", i, mean_i, mean_i - stdes[i], mean_i + stdes[i]);
+            } else {
+                println!("{:8} {:>14.4} \u{00B1} {:<.4}", i, mean_i, stdes[i]);
+            }
+
+            values.clear();
         }
-
-        values.clear();
     }
 
     exit(0);
