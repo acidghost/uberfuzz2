@@ -16,8 +16,8 @@ fi
 
 shift 3
 
-if [[ "$1" = "best" ]]; then
-  $INTERVALS -g "${glob}/best.coverage.log" -t $ticks -m > "${output}.dat"
+if [[ ("$1" = "best") || ("$1" = "union") ]]; then
+  $INTERVALS -g "${glob}/$1.coverage.log" -t $ticks -m > "${output}.dat"
   gnuplot -p -c plot_ci.plt "${output}"
 elif [[ "$1" != "" ]]; then
   for fuzzer in "$@"; do
