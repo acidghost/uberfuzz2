@@ -87,6 +87,8 @@ Vagrant.configure("2") do |config|
     apt-get install -y python-pip libdwarf-dev libelf-dev libssl-dev
     # libjpeg-turbo requirements
     apt-get install -y autoconf automake libtool nasm
+    # libming requirements
+    apt-get install -y flex bison libfreetype6 libfreetype6-dev
 
     pip install -U pip setuptools
     pip install --upgrade --force-reinstall bitvector
@@ -189,6 +191,19 @@ Vagrant.configure("2") do |config|
       cd tiff-4.0.9
       ./configure --enable-static
       make LDFLAGS=-static
+      cd ~
+    fi
+
+    if [[ ! -d libming-ming-0_4_8 ]]; then
+      wget -nv https://github.com/libming/libming/archive/ming-0_4_8.tar.gz
+      tar -xzf ming-0_4_8.tar.gz
+      rm ming-0_4_8.tar.gz
+
+      cd libming-ming-0_4_8
+      ./autogen.sh
+      ./configure --enable-static
+      make LDFLAGS=-static
+      cd ~
     fi
   SHELL
 end
