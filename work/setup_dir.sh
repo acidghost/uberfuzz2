@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 seed="$1"
+seed_vu_only="$2"
 if [[ -d "${seed}" ]]; then
   seed_folder=1
   seed="`readlink -f $1`"
@@ -15,10 +16,6 @@ for conf_file in $conf_files; do
   arr=(${conf_file//./ })
   folder=${arr[0]}
   ftype=${arr[1]}
-
-  if [[ "$2" != "" && "$folder" != "$2" ]]; then
-    continue
-  fi
 
   echo "Setting up ${folder} (type ${ftype})"
   rm -rf ".${folder}.input" ".${folder}"* $folder*.log
@@ -55,7 +52,16 @@ for conf_file in $conf_files; do
     mkdir driver
 
     if [[ $seed_folder -eq 1 ]]; then
-      cp -r $seed "in"
+      if [[ "$seed_vu_only" != "" ]]; then
+        if [[ "$ftype" = "vu" ]]; then
+          cp -r $seed in
+        else
+          mkdir in
+          echo "" > in/seed
+        fi
+      else
+        cp -r $seed in
+      fi
     else
       mkdir "in"
       echo "${seed}" > in/seed
