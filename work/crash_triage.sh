@@ -9,6 +9,7 @@ cmd="$2"
 args="$3"
 FUZZERS="aflfast fairfuzz honggfuzz"
 TRIAGE_CMDS_FILE=/tmp/triage_gdb_commands
+TMP_CRASH=/tmp/ubercrash
 AFL_AS_LIMIT=$[50 * 1024]
 HON_AS_LIMIT=$[200 * 1024]
 OLD_AS_LIMIT=`ulimit -v`
@@ -63,7 +64,7 @@ for fuzzer in ${FUZZERS[@]}; do
       echo "$hilightg $crash_i/$i/$nfiles - $fuzzer $normal `basename $file`"
       echo "Exited with code $code (`kill -l $[$code - 128]`)"
 
-      rm -f /tmp/ubercrash
+      rm -f $TMP_CRASH
       cat > $TRIAGE_CMDS_FILE <<CMDS
 break main
 run "$fargs" &> /dev/null
@@ -71,7 +72,7 @@ set \$rlim = &{0ll, 0ll}
 call getrlimit(RLIMIT_AS, \$rlim)
 set *\$rlim[0] = $as_limit * 1024
 call setrlimit(RLIMIT_AS, \$rlim)
-set logging file /tmp/ubercrash
+set logging file $TMP_CRASH
 set logging redirect on
 set logging on
 continue
@@ -80,11 +81,11 @@ bt
 exploitable
 CMDS
       gdb -batch -x $TRIAGE_CMDS_FILE $cmd > /dev/null
-      echo -e "Fuzzer: $fuzzer\nFile: $file" >> /tmp/ubercrash
+      echo -e "Fuzzer: $fuzzer\nFile: $file" >> $TMP_CRASH
 
-      h="`grep -i 'hash:' /tmp/ubercrash | cut -f2 -d' '`"
+      h="`grep -i 'hash:' $TMP_CRASH | cut -f2 -d' '`"
       if [[ "$h" != "" && "`grep -e $h $out`" = "" ]]; then
-        cat /tmp/ubercrash >> $out
+        cat $TMP_CRASH >> $out
         echo "" >> $out
         crash_i=$[$crash_i + 1]
       fi
@@ -95,7 +96,7 @@ CMDS
   done
 done
 
-rm -f /tmp/ubercrash $TRIAGE_CMDS_FILE
+rm -f $TMP_CRASH $TRIAGE_CMDS_FILE
 
 echo "done $out ($[$crash_i - 1] unique crashes)"
 
