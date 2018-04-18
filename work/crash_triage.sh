@@ -9,31 +9,33 @@ cmd="$2"
 args="$3"
 FUZZERS="aflfast fairfuzz honggfuzz"
 TRIAGE_CMDS_FILE=/tmp/triage_gdb_commands
+AFL_AS_LIMIT=$[50 * 1024]
+HON_AS_LIMIT=$[200 * 1024]
+OLD_AS_LIMIT=`ulimit -v`
 
 if [[ (! -d "$dir") || ("$cmd" = "") ]]; then
   echo "usage: $0 dir cmd [args...]"
   exit 1
 fi
 
-cat > $TRIAGE_CMDS_FILE <<CMDS
-run
-source ../../CERT_triage_tools/exploitable/exploitable.py
-bt
-exploitable
-CMDS
+out="$dir/crashes.log"
+truncate -s0 $out
 
 echo "Working on $dir..."
 
+crash_i=1
 for fuzzer in ${FUZZERS[@]}; do
   echo "Processing $fuzzer..."
   case "$fuzzer" in
     aflfast|fairfuzz)
       folder="$fuzzer/out/$fuzzer/crashes"
       name="id*"
+      as_limit=$AFL_AS_LIMIT
       ;;
     honggfuzz)
       folder="$fuzzer/out/$fuzzer"
       name="*.fuzz"
+      as_limit=$HON_AS_LIMIT
       ;;
     *)
       echo "Unrecognized fuzzer '$fuzzer'"
@@ -51,17 +53,49 @@ for fuzzer in ${FUZZERS[@]}; do
   echo "Found $nfiles files"
   for file in ${files[@]}; do
     fargs="${args/\$sub/$file}"
+
+    ulimit -Sv $as_limit
     $cmd $fargs > /dev/null 2>&1
     code=$?
+    ulimit -v $OLD_AS_LIMIT
+
     if [[ $code -gt 128 && $code -lt 255 ]]; then
-      echo "$hilightg $ierr - $i/$nfiles - $fuzzer $normal `basename $file`"
+      echo "$hilightg $crash_i/$i/$nfiles - $fuzzer $normal `basename $file`"
       echo "Exited with code $code (`kill -l $[$code - 128]`)"
-      gdb -batch -x $TRIAGE_CMDS_FILE --args $cmd $fargs
+
+      rm -f /tmp/ubercrash
+      cat > $TRIAGE_CMDS_FILE <<CMDS
+break main
+run "$fargs" &> /dev/null
+set \$rlim = &{0ll, 0ll}
+call getrlimit(RLIMIT_AS, \$rlim)
+set *\$rlim[0] = $as_limit * 1024
+call setrlimit(RLIMIT_AS, \$rlim)
+set logging file /tmp/ubercrash
+set logging redirect on
+set logging on
+continue
+source ../../CERT_triage_tools/exploitable/exploitable.py
+bt
+exploitable
+CMDS
+      gdb -batch -x $TRIAGE_CMDS_FILE $cmd > /dev/null
+      echo -e "Fuzzer: $fuzzer\nFile: $file" >> /tmp/ubercrash
+
+      h="`grep -i 'hash:' /tmp/ubercrash | cut -f2 -d' '`"
+      if [[ "$h" != "" && "`grep -e $h $out`" = "" ]]; then
+        cat /tmp/ubercrash >> $out
+        echo "" >> $out
+        crash_i=$[$crash_i + 1]
+      fi
       ierr=$[$ierr + 1]
     fi
+
     i=$[$i + 1]
   done
 done
 
-rm $TRIAGE_CMDS_FILE
+rm -f /tmp/ubercrash $TRIAGE_CMDS_FILE
+
+echo "done $out ($[$crash_i - 1] unique crashes)"
 
