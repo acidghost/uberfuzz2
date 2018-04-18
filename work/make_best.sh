@@ -18,5 +18,14 @@ if [[ ( "$glob" = "" ) || ("$ticks" = "") ]]; then
 fi
 
 for i in ${ROUNDS[@]}; do
+  echo "Processing $glob-$i..."
+  if [[ -e "$glob-$i/union.coverage.log" ]]; then
+    mv "$glob-$i/union.coverage.log" "$glob-$i/union.coverage.log.bck"
+  fi
+  rm -f "$glob-$i/best.coverage.log"
   $INTERVALS -g "$glob-$i/*.coverage.log" -t $ticks -r -b -m > "$glob-$i/best.coverage.log"
+  if [[ -e "$glob-$i/union.coverage.log.bck" ]]; then
+    mv "$glob-$i/union.coverage.log.bck" "$glob-$i/union.coverage.log"
+  fi
 done
+
