@@ -78,6 +78,7 @@ set logging on
 continue
 source ../../CERT_triage_tools/exploitable/exploitable.py
 bt
+printf "Crash IP: 0x%x\n", \$rip
 exploitable
 CMDS
       gdb -batch -x $TRIAGE_CMDS_FILE $cmd > /dev/null
