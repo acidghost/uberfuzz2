@@ -4,3 +4,4 @@
 !.gitignore
 !*.conf
 !stored_work
+!*.r
