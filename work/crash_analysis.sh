@@ -15,7 +15,8 @@ function do_average {
   [[ ${#dirs[@]} -lt 1 ]] && echo "usage: $PROGNAME average <dirs...>" && return 1
   for dir in ${dirs[@]}; do
     printf "Processing %s...\n -" "$dir"
-    local total=0
+    local total_uips=0
+    local total_uhs=0
     local nrounds=0
     for i in ${ROUNDS[@]}; do
       printf " %s" "$i"
@@ -26,12 +27,14 @@ function do_average {
       fi
       local uhs=`grep -i "hash:" $f | cut -f2 -d' ' | sort -u | wc -l`
       local uips=`grep -i "crash ip:" $f | cut -f3 -d' ' | sort -u | wc -l`
-      total=$[$total + $uips]
+      total_uips=$[$total_uips + $uips]
+      total_uhs=$[$total_uhs + $uhs]
       printf " (%d/%d)" "$uips" "$uhs"
       nrounds=$[$nrounds + 1]
     done
-    local avg=`bc -l <<< "$total / $nrounds"`
-    LC_NUMERIC=C printf "\n - Avg: %.3f\n" "$avg"
+    local avg_uips=`bc -l <<< "$total_uips / $nrounds"`
+    local avg_uhs=`bc -l <<< "$total_uhs / $nrounds"`
+    LC_NUMERIC=C printf "\n - Avg: %.3f (%.3f)\n" "$avg_uips" "$avg_uhs"
   done
   return 0
 }
@@ -53,7 +56,7 @@ function do_diff {
         echo "$cf does not exist"
         return 1
       fi
-      grep -i "crash ip:" "$cf" | cut -f3 -d' ' | sort -u >> $gfile
+      grep -i "hash:" "$cf" | cut -f2 -d' ' | sort -u >> $gfile
     done
   done
   local commonlens=`comm -12 <(cat "${ufiles[0]}" | sort -u) <(cat "${ufiles[1]}" | sort -u) | wc -l`
