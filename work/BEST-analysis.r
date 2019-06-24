@@ -37,8 +37,9 @@ print.vs <- function (x, y) {
   cat("\n", names(x)[1], "vs", names(y)[1], "\n")
 }
 
-do.best <- function (x, y, ROPE=NULL, all=F) {
-  best.out <- BESTmcmc(as.vector(unlist(x)), as.vector(unlist(y)), numSavedSteps=1000000)
+do.best <- function (x, y, ROPE=NULL, all=F, steps=1000000, burn=10000) {
+  best.out <- BESTmcmc(as.vector(unlist(x)), as.vector(unlist(y)),
+                       numSavedSteps=steps, burnInSteps=burn)
   ROPE.arg <- if (is.null(ROPE)) NULL else c(-ROPE, ROPE)
   if (all) {
     plotAll(best.out, ROPEm=ROPE.arg)
@@ -65,10 +66,20 @@ compute.ROPE <- function (...) {
   mean(apply(data.frame(...), 2, sd))
 }
 
-save.pdf <- function (filename) {
+save.pdf <- function (filename, width=4, height=4) {
   fname <- paste0(path.figures, filename, ".pdf")
-  pdf(fname, width=4, height=4, pointsize=10)
+  pdf(fname, width=width, height=height, pointsize=10)
   par(mgp=c(2.2,0.45,0), tcl=-0.4, mar=c(3.3,3.6,1.1,1.1))
+}
+
+compute.CI <- function (data, tex=F) {
+  m <- mean(data)
+  ci <- (qnorm(.975) * sd(data)) / sqrt(length(data))
+  if (tex) {
+    cat(m, "\\pm", ci)
+  } else {
+    c(m, ci)
+  }
 }
 
 path.figures <- "~/SB-uni/master/thesis/writeup/figures/"
